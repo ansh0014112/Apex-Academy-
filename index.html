@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APEX ACADEMY | Premier Competitive Examination Institute</title>
+  <meta name="description" content="India's leading coaching institute for SSC CGL, CHSL, SBI/IBPS Banking Exams, and Foundation Programs. Experienced faculty, structured pedagogy, and individual mentorship.">
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#0A1128',
+              navyLight: '#142042',
+              royal: '#1E3A8A',
+              gold: '#D97706',
+              goldHover: '#B45309',
+              goldLight: '#FEF3C7',
+              slateBg: '#F8FAFC'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="assets/images/favicon.png">
+  <link rel="shortcut icon" href="assets/images/favicon.ico">
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 selection:bg-amber-100 selection:text-amber-900">
+
+  <!-- Top Announcement Bar with Animated Flowing Boundary -->
+  <div class="top-animated-boundary bg-slate-950 text-slate-300 text-xs py-2.5 px-4 border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 tracking-wide uppercase">New Cohorts</span>
+        <span>Admissions Open: Civil Services & SSC, Banking & Railway, and APEX Foundation Batches • Offline & Live Hybrid</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs font-medium">
+        <a href="tel:+911140928739" class="hover:text-amber-400 transition-colors flex items-center gap-1">
+          <svg class="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+          Helpline: +91 (011) 4982-APEX
+        </a>
+        <span class="text-slate-700">|</span>
+        <a href="enquiry.html" class="hover:text-amber-400 transition-colors">Connaught Place, New Delhi Flagship</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Primary Sticky Navigation Bar -->
+  <header id="main-navbar" class="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200 transition-all duration-300">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-20">
+        
+        <!-- Logo -->
+        <a href="index.html" class="flex items-center gap-3.5 group" aria-label="APEX ACADEMY Homepage">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-10 sm:h-11 w-auto object-contain transition-transform duration-300 group-hover:scale-105"
+          />
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-display font-extrabold text-xl tracking-tight text-slate-950">APEX</span>
+              <span class="font-display font-bold text-xl tracking-tight text-amber-600">ACADEMY</span>
+            </div>
+            <p class="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Excellence in Competitive Exams</p>
+          </div>
+        </a>
+
+        <!-- Desktop Navigation Links -->
+        <nav class="hidden md:flex items-center gap-8 text-sm">
+          <a href="index.html" class="nav-link font-medium active">Home</a>
+          <a href="about.html" class="nav-link font-medium">About Institute</a>
+          <a href="courses.html" class="nav-link font-medium">Courses & Programs</a>
+          <a href="success-stories.html" class="nav-link font-medium">Success Stories</a>
+          <a href="enquiry.html" class="nav-link font-medium">Admission Enquiry</a>
+        </nav>
+
+        <!-- CTA Button -->
+        <div class="hidden lg:flex items-center">
+          <a href="book-counselling.html" class="btn-primary-gold px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center gap-2 hover-lift">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            Book Free Call
+          </a>
+        </div>
+
+        <!-- Mobile Menu Trigger -->
+        <div class="flex md:hidden">
+          <button id="mobile-menu-btn" type="button" class="p-2 rounded-lg text-slate-700 hover:bg-slate-100 focus:outline-none" aria-label="Open Navigation">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer Menu -->
+  <div id="mobile-backdrop" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 opacity-0 pointer-events-none transition-opacity duration-300 md:hidden"></div>
+  <div id="mobile-drawer" class="fixed top-0 right-0 w-80 max-w-full h-full bg-white z-50 shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out md:hidden flex flex-col justify-between p-6">
+    <div>
+      <div class="flex items-center justify-between pb-6 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-9 w-auto object-contain"
+          />
+          <div>
+            <span class="font-display font-bold text-lg text-slate-900">APEX ACADEMY</span>
+            <p class="text-[10px] text-slate-500 uppercase">Competitive Exams</p>
+          </div>
+        </div>
+        <button id="mobile-close-btn" class="p-2 text-slate-400 hover:text-slate-800" aria-label="Close menu">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <nav class="flex flex-col gap-4 mt-6 text-base font-medium text-slate-800">
+        <a href="index.html" class="py-2.5 px-3 rounded-lg bg-amber-50 text-amber-900 font-semibold">Home</a>
+        <a href="about.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">About the Institute</a>
+        <a href="courses.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Courses & Programs</a>
+        <a href="success-stories.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Success Stories</a>
+        <a href="enquiry.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Admission Enquiry</a>
+      </nav>
+    </div>
+
+    <div class="pt-6 border-t border-slate-100 flex flex-col gap-3">
+      <a href="book-counselling.html" class="btn-primary-gold w-full text-center py-3 rounded-xl font-semibold text-sm">
+        Book Free Counselling Call
+      </a>
+      <a href="tel:+911140928739" class="text-center text-xs font-medium text-slate-500 py-1">
+        Direct Desk: +91 (011) 4982-APEX
+      </a>
+    </div>
+  </div>
+
+  <!-- HERO SECTION WITH STAGGERED ENTRANCE -->
+  <section class="relative overflow-hidden bg-slate-950 text-white pt-12 pb-24 md:pt-20 md:pb-32 pattern-grid-dark">
+    <!-- Ambient subtle illumination circles -->
+    <div class="absolute -top-32 -left-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="absolute top-1/2 -right-32 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-8 items-center">
+        
+        <!-- Left Column: Copy & Value Proposition -->
+        <div class="lg:col-span-7 space-y-7">
+          
+          <div class="hero-animate-1 inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span class="font-medium">Admissions Open for Upcoming Academic Cohorts</span>
+          </div>
+
+          <h1 class="hero-animate-2 font-display text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.1] text-white">
+            Transform Your Aspirations Into a <span class="gold-gradient-text">Prestigious Government Career</span>.
+          </h1>
+
+          <p class="hero-animate-3 text-base sm:text-lg text-slate-300 max-w-2xl leading-relaxed font-normal">
+            Apex Academy is a premier competitive examination coaching institute dedicated to SSC CGL, CHSL, and Banking examination aspirants. We combine rigorous conceptual pedagogy, ex-officer faculty guidance, and bespoke speed-testing laboratories.
+          </p>
+
+          <!-- Core Call to Actions -->
+          <div class="hero-animate-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-4 pt-2">
+            <a href="courses.html" class="btn-primary-gold px-7 py-3.5 rounded-xl font-bold text-center text-sm sm:text-base flex items-center justify-center gap-2 group hover-lift">
+              Explore Structured Programs
+              <svg class="w-4 h-4 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+            </a>
+            <a href="book-counselling.html" class="bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 px-6 py-3.5 rounded-xl font-semibold text-center text-sm sm:text-base transition-colors flex items-center justify-center gap-2 hover-lift">
+              <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              Book Free Counselling Call
+            </a>
+          </div>
+
+          <!-- Quick Trust Badges / Dynamic Statistics -->
+          <div class="hero-animate-4 grid grid-cols-3 gap-4 pt-6 border-t border-slate-800/80">
+            <div>
+              <div class="stat-number text-2xl sm:text-3xl font-extrabold text-white font-display" data-counter-target="94.2" data-counter-suffix="%" data-counter-decimals="1" data-counter-delay="350">94.2%</div>
+              <p class="text-xs text-slate-400 mt-0.5">Tier-1 Clear Rate <span class="text-[10px] text-amber-400 font-mono">[Demo Cohort]</span></p>
+            </div>
+            <div>
+              <div class="stat-number text-2xl sm:text-3xl font-extrabold text-white font-display" data-counter-target="15" data-counter-suffix="+ Years" data-counter-delay="400">15+ Years</div>
+              <p class="text-xs text-slate-400 mt-0.5">Academic Pedagogy</p>
+            </div>
+            <div>
+              <div class="stat-number text-2xl sm:text-3xl font-extrabold text-white font-display" data-counter-target="45" data-counter-prefix="Max " data-counter-suffix=" Students" data-counter-delay="450">Max 45 Students</div>
+              <p class="text-xs text-slate-400 mt-0.5">Strict Batch Cap</p>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Right Column: Visual Composition with Floating Micro-Elements -->
+        <div class="lg:col-span-5 relative hero-animate-image">
+          <div class="relative mx-auto max-w-md lg:max-w-none">
+            
+            <!-- Main Hero Image Frame (Director Leadership Showcase) -->
+            <div class="relative rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl aspect-[4/5] bg-slate-900">
+              <img 
+                src="assets/images/apex-director.jpg" 
+                alt="Prof. Arvind Sharma, Chief Academic Director of Apex Academy" 
+                class="w-full h-full object-cover filter saturate-105"
+                style="object-position: center 15%;"
+                loading="eager"
+              />
+              <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent"></div>
+              
+              <!-- Bottom overlay content inside image -->
+              <div class="absolute bottom-6 left-6 right-6 p-4 rounded-xl bg-slate-900/90 backdrop-blur-md border border-slate-700/60 text-white">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-[11px] font-bold uppercase tracking-wider text-amber-400">Academic Leadership</span>
+                  <span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-mono">DELHI FLAGSHIP</span>
+                </div>
+                <p class="text-xs text-slate-300 leading-snug">
+                  "Speed is calculated instinct. At Apex, we don't just solve problems; we train cognitive reflexes under real exam pressure."
+                </p>
+                <div class="mt-2 text-[11px] text-slate-400 font-medium">
+                  — Prof. Arvind Sharma, Chief Academic Director
+                </div>
+              </div>
+            </div>
+
+            <!-- Floating Result Pill Badge (Smooth Subtle Float) -->
+            <div class="absolute -top-5 -left-5 bg-white text-slate-900 p-3.5 rounded-xl shadow-xl border border-slate-200 hidden sm:flex items-center gap-3 animate-float-subtle">
+              <div class="w-10 h-10 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-lg">
+                ★
+              </div>
+              <div>
+                <p class="text-xs font-bold text-slate-900">AIR Rank 14 & 47 (Demo)</p>
+                <p class="text-[10px] text-slate-500">SSC CGL Rankers Cohort</p>
+              </div>
+            </div>
+
+            <!-- Floating Live Mentorship Pill Badge (Smooth Delayed Float) -->
+            <div class="absolute -bottom-5 -right-5 bg-white text-slate-900 p-3.5 rounded-xl shadow-xl border border-slate-200 hidden sm:flex items-center gap-3 animate-float-delayed">
+              <div class="w-10 h-10 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                1:1
+              </div>
+              <div>
+                <p class="text-xs font-bold text-slate-900">Personal Mentorship</p>
+                <p class="text-[10px] text-slate-500">Weekly Strategic Audits</p>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTITUTE INTRODUCTION SECTION -->
+  <section class="py-20 bg-white reveal-on-scroll">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="max-w-3xl mx-auto text-center space-y-4 mb-16">
+        <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">The Apex Standard</span>
+        <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950 tracking-tight">
+          A Proven Pedagogy Built For Serious Government Aspirants
+        </h2>
+        <p class="text-base text-slate-600 leading-relaxed">
+          Unlike mass commercial coaching factories where students are lost in lecture halls of 500, Apex Academy operates on an elite academy model: small cohorts, accountable mentoring, and forensic question breakdown.
+        </p>
+      </div>
+
+      <!-- 3 Key Introduction Pillars -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        
+        <div class="editorial-card p-8 space-y-4">
+          <div class="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center font-bold text-lg">
+            01
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Syllabus Deconstruction</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">
+            Every topic in Quantitative Aptitude, General Reasoning, English Comprehension, and General Awareness is categorized into core archetypes and solved using high-speed elimination methods.
+          </p>
+          <div class="pt-2 text-xs font-semibold text-amber-700 flex items-center gap-1">
+            <span>Precision Methodologies</span> →
+          </div>
+        </div>
+
+        <div class="editorial-card p-8 space-y-4 border-amber-500/40 relative">
+          <div class="absolute top-4 right-4 bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">Signature</div>
+          <div class="w-12 h-12 rounded-xl bg-slate-900 text-amber-400 flex items-center justify-center font-bold text-lg">
+            02
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Daily Speed Lab Drills</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">
+            Classroom concepts are directly transferred to computer-based timed testing within 24 hours. Our adaptive diagnostic drills pin down sub-second hesitation points.
+          </p>
+          <div class="pt-2 text-xs font-semibold text-slate-900 flex items-center gap-1">
+            <span>Exam-Simulated Labs</span> →
+          </div>
+        </div>
+
+        <div class="editorial-card p-8 space-y-4">
+          <div class="w-12 h-12 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center font-bold text-lg">
+            03
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Personal Faculty Review</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">
+            Every aspirant is paired with a designated senior faculty mentor for weekly score audits, burnout prevention, and bespoke revision planning tailored to individual weak areas.
+          </p>
+          <div class="pt-2 text-xs font-semibold text-blue-700 flex items-center gap-1">
+            <span>Individual Accountability</span> →
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- POPULAR COURSES PREVIEW SECTION -->
+  <section class="py-20 bg-slate-50 border-y border-slate-200 reveal-on-scroll">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+        <div>
+          <span class="badge-navy px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Curriculum Excellence</span>
+          <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950 tracking-tight mt-2">
+            Structured Cohorts for Upcoming Examinations
+          </h2>
+          <p class="text-sm sm:text-base text-slate-600 mt-2 max-w-xl">
+            Designed to cover Tier-1 fundamentals, Tier-2 advanced problem-solving, and interview personality rounds.
+          </p>
+        </div>
+        <a href="courses.html" class="inline-flex items-center gap-2 text-sm font-bold text-slate-950 hover:text-amber-600 transition-colors">
+          View All Programs & Syllabi
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+        </a>
+      </div>
+
+      <!-- 3 Featured Course Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        
+        <!-- Course 1: Civil Services & SSC Exam Preparation -->
+        <div class="editorial-card flex flex-col justify-between overflow-hidden group">
+          <div>
+            <div class="relative aspect-[16/9] w-full overflow-hidden bg-slate-950">
+              <img 
+                src="assets/images/course-civil-services-ssc.jpg" 
+                alt="Civil Services & SSC Exam Preparation - Apex Academy" 
+                class="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              />
+              <div class="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-transparent to-transparent"></div>
+              <div class="absolute top-3 left-3">
+                <span class="badge-gold px-2.5 py-1 rounded text-[11px] font-bold">Flagship Program</span>
+              </div>
+              <div class="absolute bottom-3 right-3 bg-slate-950/90 backdrop-blur-md px-2.5 py-1 rounded text-[11px] font-mono text-amber-400 border border-amber-500/30">
+                10 - 12 Months
+              </div>
+            </div>
+
+            <div class="p-6 space-y-4">
+              <div class="flex items-center justify-between text-xs text-slate-500">
+                <span class="font-semibold text-slate-700">Central & State Services</span>
+                <span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[10px] font-bold">Batch Cap: 45</span>
+              </div>
+              
+              <h3 class="font-display font-bold text-xl text-slate-900 group-hover:text-amber-700 transition-colors">
+                Civil Services & SSC Exam Preparation
+              </h3>
+
+              <p class="text-xs text-slate-600 leading-relaxed">
+                Comprehensive, multi-tiered preparation combining conceptual depth, administrative analytical skills, and speed heuristics for national and state officer cadres.
+              </p>
+
+              <!-- Examination Breakdown -->
+              <div class="space-y-2 pt-2 border-t border-slate-100 text-xs">
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">Civil Services:</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">UPSC CSE</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">State PCS</span>
+                  </div>
+                </div>
+
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">SSC & State Examinations:</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200/60 text-[11px] font-semibold">SSC CGL</span>
+                    <span class="px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200/60 text-[11px] font-semibold">SSC CHSL</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">SSC GD</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">SSC MTS</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">+ State Exams</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 pt-0 border-t border-slate-100 flex items-center gap-2">
+            <a href="courses.html#civil-services-ssc" class="px-3.5 py-2.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 hover-lift text-center flex-1">
+              View Course Details
+            </a>
+            <a href="enquiry.html?course=civil-services-ssc" class="btn-primary-navy px-3.5 py-2.5 rounded-lg text-xs font-bold text-center flex-1 hover-lift">
+              Enquire Now →
+            </a>
+          </div>
+        </div>
+
+        <!-- Course 2: Banking & Railway Exam Preparation -->
+        <div class="editorial-card flex flex-col justify-between overflow-hidden group">
+          <div>
+            <div class="relative aspect-[16/9] w-full overflow-hidden bg-slate-950 flex items-center justify-center">
+              <img 
+                src="assets/images/course-banking-railway.jpg" 
+                alt="Banking & Railway Exam Preparation - Apex Academy" 
+                class="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              />
+              <div class="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-transparent to-transparent"></div>
+              <div class="absolute top-3 left-3">
+                <span class="badge-navy px-2.5 py-1 rounded text-[11px] font-bold">Banking & Railways</span>
+              </div>
+              <div class="absolute bottom-3 right-3 bg-slate-950/90 backdrop-blur-md px-2.5 py-1 rounded text-[11px] font-mono text-amber-400 border border-amber-500/30">
+                6 - 8 Months
+              </div>
+            </div>
+
+            <div class="p-6 space-y-4">
+              <div class="flex items-center justify-between text-xs text-slate-500">
+                <span class="font-semibold text-slate-700">Banking & Railway Cadres</span>
+                <span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-[10px] font-bold">Batch Cap: 40</span>
+              </div>
+              
+              <h3 class="font-display font-bold text-xl text-slate-900 group-hover:text-amber-700 transition-colors">
+                Banking & Railway Exam Preparation
+              </h3>
+
+              <p class="text-xs text-slate-600 leading-relaxed">
+                Hyper-focused on high-speed Data Interpretation, complex reasoning puzzles, technical/general science, and banking interview presentation protocols.
+              </p>
+
+              <!-- Examination Breakdown -->
+              <div class="space-y-2 pt-2 border-t border-slate-100 text-xs">
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">Banking Examinations:</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-900 border border-blue-200/60 text-[11px] font-semibold">IBPS PO</span>
+                    <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-900 border border-blue-200/60 text-[11px] font-semibold">IBPS Clerk</span>
+                    <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-900 border border-blue-200/60 text-[11px] font-semibold">SBI PO</span>
+                    <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-900 border border-blue-200/60 text-[11px] font-semibold">SBI Clerk</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">RBI Assistant</span>
+                  </div>
+                </div>
+
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">Railway Examinations (RRB):</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-red-50 text-red-900 border border-red-200/60 text-[11px] font-semibold">RRB NTPC</span>
+                    <span class="px-2 py-0.5 rounded bg-red-50 text-red-900 border border-red-200/60 text-[11px] font-semibold">RRB Group D</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">RRB ALP</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">RRB Technician</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 pt-0 border-t border-slate-100 flex items-center gap-2">
+            <a href="courses.html#banking-railway" class="px-3.5 py-2.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 hover-lift text-center flex-1">
+              View Course Details
+            </a>
+            <a href="enquiry.html?course=banking-railway" class="btn-primary-navy px-3.5 py-2.5 rounded-lg text-xs font-bold text-center flex-1 hover-lift">
+              Enquire Now →
+            </a>
+          </div>
+        </div>
+
+        <!-- Course 3: APEX Foundation Program -->
+        <div class="editorial-card flex flex-col justify-between overflow-hidden group">
+          <div>
+            <div class="relative aspect-[16/9] w-full overflow-hidden bg-slate-950">
+              <img 
+                src="assets/images/course-foundation.jpg" 
+                alt="APEX Foundation Program - Govt Exam Beginner Batch" 
+                class="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+              />
+              <div class="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-transparent to-transparent"></div>
+              <div class="absolute top-3 left-3">
+                <span class="badge-emerald px-2.5 py-1 rounded text-[11px] font-bold">Class 12 & Undergrads</span>
+              </div>
+              <div class="absolute bottom-3 right-3 bg-slate-950/90 backdrop-blur-md px-2.5 py-1 rounded text-[11px] font-mono text-amber-400 border border-amber-500/30">
+                6 Months Base
+              </div>
+            </div>
+
+            <div class="p-6 space-y-4">
+              <div class="flex items-center justify-between text-xs text-slate-500">
+                <span class="font-semibold text-slate-700">Class 12 & College Students</span>
+                <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold">Beginner Friendly</span>
+              </div>
+              
+              <h3 class="font-display font-bold text-xl text-slate-900 group-hover:text-amber-700 transition-colors">
+                APEX Foundation Program
+              </h3>
+
+              <p class="text-xs text-slate-600 leading-relaxed">
+                A structured bridge curriculum designed to build rock-solid basics in mathematics, reasoning logic, English fundamentals, and General Awareness from NCERT first principles.
+              </p>
+
+              <!-- Core Subjects & Audience -->
+              <div class="space-y-2 pt-2 border-t border-slate-100 text-xs">
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">Target Aspirants:</span>
+                  <p class="text-[11px] text-slate-600">Students who completed Class 12, college students, and beginners preparing for future exams.</p>
+                </div>
+
+                <div>
+                  <span class="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-1">Core Subject Foundations:</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-900 border border-emerald-200/60 text-[11px] font-semibold">Basic Mathematics</span>
+                    <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-900 border border-emerald-200/60 text-[11px] font-semibold">Quant Fundamentals</span>
+                    <span class="px-2 py-0.5 rounded bg-emerald-50 text-emerald-900 border border-emerald-200/60 text-[11px] font-semibold">Basic Reasoning</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">English Fundamentals</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">General Awareness</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] font-semibold">Exam Basics</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-6 pt-0 border-t border-slate-100 flex items-center gap-2">
+            <a href="courses.html#foundation" class="px-3.5 py-2.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 hover-lift text-center flex-1">
+              View Course Details
+            </a>
+            <a href="enquiry.html?course=foundation" class="btn-primary-navy px-3.5 py-2.5 rounded-lg text-xs font-bold text-center flex-1 hover-lift">
+              Enquire Now →
+            </a>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- WHY CHOOSE US SECTION (BENTO GRID ARCHITECTURE) -->
+  <section class="py-20 bg-white reveal-on-scroll">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="max-w-3xl mb-14">
+        <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">The Apex Advantage</span>
+        <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950 tracking-tight mt-3">
+          Engineered for Rankers. Not Mass Batches.
+        </h2>
+        <p class="text-base text-slate-600 mt-2">
+          Competitive exams are decided by 0.25 negative marks and 10-second calculation differences. Here is how our operational framework gives you the statistical edge.
+        </p>
+      </div>
+
+      <!-- Bento Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+        
+        <!-- Bento Item 1: Large Feature -->
+        <div class="md:col-span-8 bg-slate-950 text-white rounded-2xl p-8 sm:p-10 flex flex-col justify-between relative overflow-hidden pattern-grid-dark">
+          <div class="space-y-4 max-w-lg z-10">
+            <span class="text-xs uppercase font-mono tracking-widest text-amber-400 font-semibold">Faculty Benchmark</span>
+            <h3 class="font-display text-2xl sm:text-3xl font-bold leading-tight">
+              Taught Solely by Ex-Civil Servants and Top 0.1% Rankers
+            </h3>
+            <p class="text-sm text-slate-300 leading-relaxed">
+              We do not hire fresh freelancers. Every faculty member has personally cleared the examination at an All-India percentile or served in relevant ministries, bringing insider clarity to current pattern shifts.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-8 z-10 border-t border-slate-800 mt-6">
+            <div>
+              <p class="text-xl font-bold text-white font-display">12,000+</p>
+              <p class="text-xs text-slate-400">Class Hours Delivered</p>
+            </div>
+            <div>
+              <p class="text-xl font-bold text-white font-display">100%</p>
+              <p class="text-xs text-slate-400">In-house Research Cell</p>
+            </div>
+            <div>
+              <p class="text-xl font-bold text-white font-display">1 : 15</p>
+              <p class="text-xs text-slate-400">Mentor to Aspirant Ratio</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bento Item 2: Speed Labs -->
+        <div class="md:col-span-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl p-8 flex flex-col justify-between">
+          <div class="space-y-3">
+            <div class="w-10 h-10 rounded-lg bg-amber-600 text-white flex items-center justify-center font-bold">
+              ⚡
+            </div>
+            <h3 class="font-display font-bold text-xl text-slate-900">Computer Speed Labs</h3>
+            <p class="text-xs text-slate-600 leading-relaxed">
+              Dedicated 120-seat computer terminal lab replicating exact TCS-iON interface used in SSC and IBPS exams. Real-time rank calculation against All-India benchmarks.
+            </p>
+          </div>
+          <div class="pt-4 text-xs font-bold text-amber-800 flex items-center gap-1">
+            <span>Interface Familiarity</span> →
+          </div>
+        </div>
+
+        <!-- Bento Item 3: Personalized Diagnostic Reports -->
+        <div class="md:col-span-4 bg-slate-50 border border-slate-200 rounded-2xl p-8 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-blue-900 text-white flex items-center justify-center font-bold">
+            📊
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Predictive Diagnostic Mocks</h3>
+          <p class="text-xs text-slate-600 leading-relaxed">
+            Our proprietary analysis breaks down time spent per question, accuracy in arithmetic vs algebra, and accuracy dips under cognitive fatigue in the final 15 minutes.
+          </p>
+        </div>
+
+        <!-- Bento Item 4: Small Cohort Commitment -->
+        <div class="md:col-span-4 bg-slate-50 border border-slate-200 rounded-2xl p-8 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-emerald-800 text-white flex items-center justify-center font-bold">
+            🛡️
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Strict Cap: 45 Students</h3>
+          <p class="text-xs text-slate-600 leading-relaxed">
+            No audio-speaker megahalls. Faculty knows every student by first name, current mock test score curve, and specific conceptual vulnerabilities.
+          </p>
+        </div>
+
+        <!-- Bento Item 5: Daily Current Affairs Vault -->
+        <div class="md:col-span-4 bg-slate-50 border border-slate-200 rounded-2xl p-8 space-y-3">
+          <div class="w-10 h-10 rounded-lg bg-purple-900 text-white flex items-center justify-center font-bold">
+            📑
+          </div>
+          <h3 class="font-display font-bold text-xl text-slate-900">Curated GK & Current Dossiers</h3>
+          <p class="text-xs text-slate-600 leading-relaxed">
+            No 400-page unstructured magazines. We deliver daily 15-minute crisp dossiers mapped strictly to SSC CGL and Banking examination question patterns.
+          </p>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- FACULTY INTRODUCTION PREVIEW -->
+  <section class="py-20 bg-slate-50 border-t border-slate-200 reveal-on-scroll">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+        <div>
+          <span class="badge-navy px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Academic Leadership</span>
+          <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950 tracking-tight mt-2">
+            Mentorship by Subject Authorities
+          </h2>
+          <p class="text-sm sm:text-base text-slate-600 mt-2 max-w-xl">
+            Meet the academic directors guiding you through syllabus mastery and psychological resilience.
+          </p>
+        </div>
+        <a href="about.html" class="inline-flex items-center gap-2 text-sm font-bold text-slate-950 hover:text-amber-600 transition-colors">
+          View All Faculty & Institute Story
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+        </a>
+      </div>
+
+      <!-- 4 Faculty Cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        
+        <!-- Faculty 1: Ms. Nerru Choudhary -->
+        <div class="editorial-card overflow-hidden group">
+          <div class="h-64 overflow-hidden bg-slate-100 relative">
+            <img 
+              src="assets/images/nerru-choudhary.jpg" 
+              alt="Faculty Ms. Nerru Choudhary" 
+              class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              style="object-position: center 20%;"
+              loading="lazy"
+            />
+            <div class="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded text-[11px] text-amber-400 font-mono">
+              Senior Faculty
+            </div>
+          </div>
+          <div class="p-6 space-y-2">
+            <h3 class="font-display font-bold text-lg text-slate-900">Ms. Nerru Choudhary</h3>
+            <p class="text-xs text-amber-700 font-semibold uppercase tracking-wider">General Awareness & Polity</p>
+            <p class="text-xs text-slate-600 leading-relaxed pt-2">
+              Transforms dry general studies into structured memory charts, ensuring high marks in static GK and modern history.
+            </p>
+          </div>
+        </div>
+
+        <!-- Faculty 2: Mr. Pankaj Rathi -->
+        <div class="editorial-card overflow-hidden group">
+          <div class="h-64 overflow-hidden bg-slate-100 relative">
+            <img 
+              src="assets/images/pankaj-rathi.jpg" 
+              alt="Faculty Mr. Pankaj Rathi" 
+              class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              style="object-position: center 20%;"
+              loading="lazy"
+            />
+            <div class="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded text-[11px] text-amber-400 font-mono">
+              Ex-Bank Specialist Officer
+            </div>
+          </div>
+          <div class="p-6 space-y-2">
+            <h3 class="font-display font-bold text-lg text-slate-900">Mr. Pankaj Rathi</h3>
+            <p class="text-xs text-amber-700 font-semibold uppercase tracking-wider">Banking Financial Awareness & DI</p>
+            <p class="text-xs text-slate-600 leading-relaxed pt-2">
+              Cleared SBI PO with 99.8th percentile. Leads our financial awareness laboratory and mock interview panels.
+            </p>
+          </div>
+        </div>
+
+        <!-- Faculty 3: Mr. Amit Vashishth -->
+        <div class="editorial-card overflow-hidden group">
+          <div class="h-64 overflow-hidden bg-slate-900 relative">
+            <img 
+              src="assets/images/amit-vashishth.jpg" 
+              alt="Faculty Mr. Amit Vashishth" 
+              class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              style="object-position: center 15%;"
+              loading="lazy"
+            />
+            <div class="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded text-[11px] text-amber-400 font-mono">
+              Senior Faculty - Quant
+            </div>
+          </div>
+          <div class="p-6 space-y-2">
+            <h3 class="font-display font-bold text-lg text-slate-900">Mr. Amit Vashishth</h3>
+            <p class="text-xs text-amber-700 font-semibold uppercase tracking-wider">Quantitative Aptitude & Advanced Maths</p>
+            <p class="text-xs text-slate-600 leading-relaxed pt-2">
+              18+ years mentoring top rankers in SSC CGL and CAT. Master of speed techniques and Vedic calculation matrices.
+            </p>
+          </div>
+        </div>
+
+        <!-- Faculty 4: Mr. Arjun Singh -->
+        <div class="editorial-card overflow-hidden group">
+          <div class="h-64 overflow-hidden bg-slate-100 relative">
+            <img 
+              src="assets/images/arjun-singh.jpg" 
+              alt="Faculty Mr. Arjun Singh" 
+              class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              style="object-position: center 15%;"
+              loading="lazy"
+            />
+            <div class="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded text-[11px] text-amber-400 font-mono">
+              Senior Faculty - English
+            </div>
+          </div>
+          <div class="p-6 space-y-2">
+            <h3 class="font-display font-bold text-lg text-slate-900">Mr. Arjun Singh</h3>
+            <p class="text-xs text-amber-700 font-semibold uppercase tracking-wider">English Language & Critical Reasoning</p>
+            <p class="text-xs text-slate-600 leading-relaxed pt-2">
+              Former Editorial Analyst & Language Trainer. Expert in eliminating ambiguity in reading comprehension and cloze tests.
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- STUDENT SUCCESS & ACHIEVEMENTS SECTION (DEMO LABELLED) -->
+  <section class="py-20 bg-slate-950 text-white pattern-grid-dark reveal-on-scroll">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-14">
+        <div>
+          <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Real Outcomes</span>
+          <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-white tracking-tight mt-2">
+            Alumni Success & Hall of Fame
+          </h2>
+          <p class="text-sm sm:text-base text-slate-300 mt-2 max-w-xl">
+            Representing the perseverance of aspirants who transformed their mock test percentiles into appointment letters.
+          </p>
+        </div>
+        <div class="text-xs font-mono text-amber-400 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg self-start md:self-auto">
+          * Demo Cohort Profiles for Portfolio Exhibition
+        </div>
+      </div>
+
+      <!-- Ranker Highlights Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+        
+        <div class="dark-card p-6 flex flex-col justify-between border-amber-500/30">
+          <div>
+            <div class="flex items-center gap-3 mb-4">
+              <img src="https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&q=80" alt="Demo Student Rohan" class="w-12 h-12 rounded-full object-cover border-2 border-amber-500">
+              <div>
+                <h4 class="font-bold text-sm text-white">Rohan K. Verma</h4>
+                <p class="text-[11px] text-amber-400 font-mono">AIR 14 • SSC CGL (Demo)</p>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed italic">
+              "The speed lab at Apex changed how I approached the math section. I cut down calculation time by 22 seconds per question."
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 flex justify-between">
+            <span>Posted: Assistant Section Officer</span>
+          </div>
+        </div>
+
+        <div class="dark-card p-6 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center gap-3 mb-4">
+              <img src="https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=200&q=80" alt="Demo Student Sneha" class="w-12 h-12 rounded-full object-cover border-2 border-slate-700">
+              <div>
+                <h4 class="font-bold text-sm text-white">Sneha Mukhopadhyay</h4>
+                <p class="text-[11px] text-amber-400 font-mono">AIR 03 • SBI PO (Demo)</p>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed italic">
+              "Vikramaditya Sir's mock interview panel simulated the exact stress test questions I faced at SBI Local Head Office."
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 flex justify-between">
+            <span>Scale-1 Probationary Officer</span>
+          </div>
+        </div>
+
+        <div class="dark-card p-6 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center gap-3 mb-4">
+              <img src="https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&q=80" alt="Demo Student Aman" class="w-12 h-12 rounded-full object-cover border-2 border-slate-700">
+              <div>
+                <h4 class="font-bold text-sm text-white">Amanpreet Singh</h4>
+                <p class="text-[11px] text-amber-400 font-mono">AIR 52 • SSC CHSL (Demo)</p>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed italic">
+              "The individual doubt clearing was honest. When I failed mock 14, my mentor analyzed my fatigue patterns and reset my routine."
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 flex justify-between">
+            <span>Postal / Sorting Assistant</span>
+          </div>
+        </div>
+
+        <div class="dark-card p-6 flex flex-col justify-between">
+          <div>
+            <div class="flex items-center gap-3 mb-4">
+              <img src="https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80" alt="Demo Student Divya" class="w-12 h-12 rounded-full object-cover border-2 border-slate-700">
+              <div>
+                <h4 class="font-bold text-sm text-white">Divya Nair</h4>
+                <p class="text-[11px] text-amber-400 font-mono">IBPS PO Selected (Demo)</p>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed italic">
+              "Coming from a humanities background, maths was terrifying. The foundation module rebuilt my basics from zero."
+            </p>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 flex justify-between">
+            <span>Bank of Baroda PO</span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="mt-10 text-center">
+        <a href="success-stories.html" class="inline-flex items-center gap-2 text-sm font-semibold text-amber-400 hover:text-amber-300 transition-colors">
+          Read Full Preparation Journeys & Interview Transcripts
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- INTERACTIVE STUDENT TESTIMONIAL SLIDER -->
+  <section class="py-20 bg-white reveal-on-scroll">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="text-center space-y-3 mb-12">
+        <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Aspirant Experiences</span>
+        <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950">In Their Own Words</h2>
+        <p class="text-sm text-slate-500">Real feedback on our test-prep discipline and faculty accessibility.</p>
+      </div>
+
+      <!-- Testimonial Slider Container -->
+      <div class="testimonial-slider relative bg-slate-50 p-8 sm:p-12 rounded-2xl border border-slate-200">
+        
+        <div class="quote-mark select-none text-slate-300 font-editorial leading-none -mt-4">“</div>
+
+        <!-- Slide 1 -->
+        <div class="testimonial-slide space-y-5">
+          <blockquote class="text-lg sm:text-xl md:text-2xl font-display font-medium text-slate-900 leading-snug">
+            "Before joining Apex Academy, I had spent two years wandering through YouTube videos and random mock tests without a disciplined strategy. Here, the structure is uncompromising: you learn the concept at 9 AM, drill it at 11 AM, and debug errors with faculty at 4 PM."
+          </blockquote>
+          <div class="flex items-center justify-between border-t border-slate-200 pt-4">
+            <div>
+              <p class="font-display font-bold text-base text-slate-950">Prashant Shekhar</p>
+              <p class="text-xs text-amber-700 font-semibold">Inspector of Income Tax (CBDT) • SSC CGL Batch [Demo]</p>
+            </div>
+            <div class="text-amber-500 text-sm">★★★★★</div>
+          </div>
+        </div>
+
+        <!-- Slide 2 -->
+        <div class="testimonial-slide hidden space-y-5">
+          <blockquote class="text-lg sm:text-xl md:text-2xl font-display font-medium text-slate-900 leading-snug">
+            "The 120-seat computer testing laboratory was the single biggest differentiator for me. Practicing on identical software with countdown clocks completely eliminated my exam day panic. I attempted 88 questions in 60 minutes with 96% accuracy."
+          </blockquote>
+          <div class="flex items-center justify-between border-t border-slate-200 pt-4">
+            <div>
+              <p class="font-display font-bold text-base text-slate-950">Meenakshi Sundaram</p>
+              <p class="text-xs text-amber-700 font-semibold">Scale-1 Officer, Canara Bank [Demo]</p>
+            </div>
+            <div class="text-amber-500 text-sm">★★★★★</div>
+          </div>
+        </div>
+
+        <!-- Slide 3 -->
+        <div class="testimonial-slide hidden space-y-5">
+          <blockquote class="text-lg sm:text-xl md:text-2xl font-display font-medium text-slate-900 leading-snug">
+            "As a college final-year student, I couldn't afford to waste time on generic 600-student mega-halls. The 45-student batch cap meant Prof. Arvind Sharma personally reviewed my error log every single week."
+          </blockquote>
+          <div class="flex items-center justify-between border-t border-slate-200 pt-4">
+            <div>
+              <p class="font-display font-bold text-base text-slate-950">Harish Chandran</p>
+              <p class="text-xs text-amber-700 font-semibold">1-Year Undergrad Foundation Cohort [Demo]</p>
+            </div>
+            <div class="text-amber-500 text-sm">★★★★★</div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex items-center justify-between pt-8 mt-4 border-t border-slate-200/60">
+          <div class="slider-dots flex items-center gap-2"></div>
+          <div class="flex items-center gap-2">
+            <button class="slider-prev p-2.5 rounded-xl border border-slate-300 hover:bg-slate-200 text-slate-700 hover-lift transition-colors" aria-label="Previous Testimonial">
+              ←
+            </button>
+            <button class="slider-next p-2.5 rounded-xl border border-slate-300 hover:bg-slate-200 text-slate-700 hover-lift transition-colors" aria-label="Next Testimonial">
+              →
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- HOMEPAGE FAQ SECTION (ACCORDION INTERACTION) -->
+  <section class="py-20 bg-slate-50 border-t border-slate-200 reveal-on-scroll">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+      
+      <div class="text-center space-y-3">
+        <span class="badge-navy px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Common Questions</span>
+        <h2 class="font-display text-3xl font-extrabold text-slate-950">Frequently Asked Questions</h2>
+        <p class="text-sm text-slate-600">Key details about batch enrollment, learning modes, and mentorship.</p>
+      </div>
+
+      <div class="faq-accordion-container space-y-4">
+        
+        <div class="faq-accordion-item">
+          <button type="button" class="faq-accordion-btn">
+            <span>How does the 45-student batch cap benefit my preparation?</span>
+            <span class="faq-chevron text-slate-400">▼</span>
+          </button>
+          <div class="faq-accordion-content text-xs sm:text-sm text-slate-600 leading-relaxed">
+            In typical coaching institutes with 500 students per hall, personal attention is mathematically impossible. Our 45-student cap ensures faculty knows your mock performance trajectory, reviews your calculation bottlenecks, and answers every doubt directly without intimidation.
+          </div>
+        </div>
+
+        <div class="faq-accordion-item">
+          <button type="button" class="faq-accordion-btn">
+            <span>Can I switch between Offline Classroom and Live Online modes?</span>
+            <span class="faq-chevron text-slate-400">▼</span>
+          </button>
+          <div class="faq-accordion-content text-xs sm:text-sm text-slate-600 leading-relaxed">
+            Yes. All classroom sessions in our Connaught Place campus are simultaneously broadcast in high-definition with 2-way audio interaction. If you travel or fall unwell, you can seamlessly attend live online without missing a single topic.
+          </div>
+        </div>
+
+        <div class="faq-accordion-item">
+          <button type="button" class="faq-accordion-btn">
+            <span>What is included in the complimentary Counselling Call?</span>
+            <span class="faq-chevron text-slate-400">▼</span>
+          </button>
+          <div class="faq-accordion-content text-xs sm:text-sm text-slate-600 leading-relaxed">
+            During the 30-minute session, a Senior Academic Advisor conducts a baseline diagnostic audit of your preparation stage, shares previous 5-year question trends for your target exam, and outlines a personalized daily study timetable.
+          </div>
+        </div>
+
+        <div class="faq-accordion-item">
+          <button type="button" class="faq-accordion-btn">
+            <span>Do you provide printed study materials and test series?</span>
+            <span class="faq-chevron text-slate-400">▼</span>
+          </button>
+          <div class="faq-accordion-content text-xs sm:text-sm text-slate-600 leading-relaxed">
+            Yes, every enrolled student receives our comprehensive 8-volume concept manuals and full access to our 120-seat computer testing laboratory running exact TCS-iON exam simulations.
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- FINAL ADMISSION ENQUIRY CTA SECTION -->
+  <section class="py-20 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 text-white relative overflow-hidden reveal-on-scroll">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10 space-y-6">
+      
+      <span class="inline-block bg-amber-500/20 text-amber-400 border border-amber-500/30 px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+        Admissions Open for Upcoming Term
+      </span>
+
+      <h2 class="font-display text-3xl sm:text-4xl md:text-5xl font-extrabold text-white tracking-tight">
+        Take The First Decisive Step Toward Your <span class="gold-gradient-text">Officer Rank</span>.
+      </h2>
+
+      <p class="text-sm sm:text-base text-slate-300 max-w-2xl mx-auto leading-relaxed">
+        Seats are strictly capped at 45 students per cohort to guarantee direct faculty mentorship. Speak with our Senior Academic Advisor today to evaluate your preparation roadmap.
+      </p>
+
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+        <a href="enquiry.html" class="btn-primary-gold px-8 py-4 rounded-xl font-bold text-base w-full sm:w-auto text-center flex items-center justify-center gap-2 hover-lift">
+          Submit Admission Enquiry
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+        </a>
+        <a href="book-counselling.html" class="bg-white/10 hover:bg-white/20 border border-white/20 text-white px-8 py-4 rounded-xl font-semibold text-base w-full sm:w-auto text-center transition-colors hover-lift">
+          Book Free 1-on-1 Strategy Call
+        </a>
+      </div>
+
+      <div class="pt-8 text-xs text-slate-400 flex flex-wrap justify-center items-center gap-6">
+        <span class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          No Obligation Consultation
+        </span>
+        <span class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          Free Diagnostic Mock Assessment
+        </span>
+        <span class="flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          Personalized Timetable & Schedule
+        </span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- PROFESSIONAL FOOTER -->
+  <footer class="bg-slate-950 text-slate-400 text-sm border-t border-slate-900 pt-16 pb-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <!-- Demo Disclaimer Callout -->
+      <div class="mb-12 p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span class="font-semibold text-slate-200">PORTFOLIO DEMONSTRATION NOTICE:</span>
+          <span>Apex Academy is a fictional coaching institute prototype created for web design demonstration.</span>
+        </div>
+        <span class="text-[11px] text-amber-500/90 font-mono">Frontend Showcase Model</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10 pb-12 border-b border-slate-900">
+        
+        <!-- Brand Summary -->
+        <div class="lg:col-span-2 space-y-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-white flex items-center justify-center p-1.5 shadow">
+              <img src="assets/images/apex-logo-clean.png" alt="APEX ACADEMY" class="w-full h-full object-contain" />
+            </div>
+            <div>
+              <span class="font-display font-extrabold text-xl text-white tracking-tight">APEX ACADEMY</span>
+              <p class="text-[10px] uppercase tracking-widest text-amber-500 font-semibold">Institute for Competitive Exams</p>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed max-w-sm">
+            Setting the gold standard for SSC CGL, CHSL, and Banking examination mentoring in India. Structured pedagogy, small-batch focus, and high-performance speed laboratories.
+          </p>
+          <div class="pt-2 text-xs space-y-1 text-slate-400">
+            <p><strong class="text-white">Flagship Campus:</strong> 42, Barakhamba Road, Connaught Place, New Delhi 110001</p>
+            <p><strong class="text-white">Direct Line:</strong> +91 (011) 4982-APEX / +91 98765 43210</p>
+            <p><strong class="text-white">Academic Enquiries:</strong> admissions@apexacademy.edu.in</p>
+          </div>
+        </div>
+
+        <!-- Navigation Links -->
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Quick Navigation</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="index.html" class="hover:text-amber-400 transition-colors">Home Page</a></li>
+            <li><a href="about.html" class="hover:text-amber-400 transition-colors">About the Institute</a></li>
+            <li><a href="courses.html" class="hover:text-amber-400 transition-colors">Courses & Programs</a></li>
+            <li><a href="success-stories.html" class="hover:text-amber-400 transition-colors">Success Stories & Results</a></li>
+            <li><a href="enquiry.html" class="hover:text-amber-400 transition-colors">Admission Enquiry</a></li>
+            <li><a href="book-counselling.html" class="hover:text-amber-400 transition-colors">Book Free Counselling</a></li>
+          </ul>
+        </div>
+
+        <!-- Course Streams -->
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Major Programs</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="courses.html#civil-services-ssc" class="hover:text-amber-400 transition-colors">Civil Services & SSC Exam Prep</a></li>
+            <li><a href="courses.html#banking-railway" class="hover:text-amber-400 transition-colors">Banking & Railway Exam Prep</a></li>
+            <li><a href="courses.html#foundation" class="hover:text-amber-400 transition-colors">APEX Foundation Program</a></li>
+            <li><a href="enquiry.html?course=civil-services-ssc" class="hover:text-amber-400 transition-colors">UPSC & SSC Admissions</a></li>
+            <li><a href="enquiry.html?course=banking-railway" class="hover:text-amber-400 transition-colors">Bank & Railway Enrolment</a></li>
+            <li><a href="enquiry.html?course=foundation" class="hover:text-amber-400 transition-colors">Foundation Batch Inquiry</a></li>
+          </ul>
+        </div>
+
+        <!-- Operating Hours & Callback -->
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Campus Hours</h4>
+          <div class="text-xs space-y-1.5 text-slate-400">
+            <p><span class="text-white">Monday – Saturday:</span> 07:30 AM – 08:30 PM</p>
+            <p><span class="text-white">Sunday (Mock Testing):</span> 08:00 AM – 06:00 PM</p>
+            <p><span class="text-white">Library Access:</span> 24/7 for Enrolled Students</p>
+          </div>
+          <div class="pt-3">
+            <a href="book-counselling.html" class="btn-primary-gold px-4 py-2 rounded-lg text-xs font-bold text-center block">
+              Schedule Campus Visit
+            </a>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Copyright Bottom Bar -->
+      <div class="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-4">
+        <p>© 2026 APEX ACADEMY. All rights reserved. Designed for Excellence.</p>
+        <div class="flex gap-6">
+          <a href="#" class="hover:text-slate-300">Privacy Policy</a>
+          <a href="#" class="hover:text-slate-300">Terms of Admission</a>
+          <a href="#" class="hover:text-slate-300">Honor Code</a>
+          <a href="#" class="hover:text-slate-300">Sitemap</a>
+        </div>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- Floating Direct WhatsApp Button -->
+  <a 
+    href="https://wa.me/919876543210?text=Hello%20Apex%20Academy%2C%20I%20would%20like%20to%20enquire%20about%20admissions." 
+    target="_blank" 
+    rel="noopener noreferrer"
+    class="fixed bottom-6 left-6 z-40 bg-emerald-600 hover:bg-emerald-500 text-white p-3.5 rounded-full shadow-2xl flex items-center gap-2 hover-lift group border border-emerald-400/40"
+    title="Chat with Senior Counselor on WhatsApp"
+  >
+    <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24">
+      <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+    </svg>
+    <span class="text-xs font-bold pr-1 hidden sm:inline">Need Guidance? Chat Now</span>
+  </a>
+
+  <!-- Scripts -->
+  <script src="js/main.js"></script>
+</body>
+</html>

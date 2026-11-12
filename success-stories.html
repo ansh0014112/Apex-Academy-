@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Success Stories & Student Feedback | Apex Academy Hall of Fame</title>
+  <meta name="description" content="Discover inspiring preparation journeys, study strategies, and verified feedback from Apex Academy alumni across SSC CGL, CHSL, and Banking exams.">
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#0A1128',
+              navyLight: '#142042',
+              royal: '#1E3A8A',
+              gold: '#D97706',
+              goldHover: '#B45309',
+              goldLight: '#FEF3C7',
+              slateBg: '#F8FAFC'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="assets/images/favicon.png">
+  <link rel="shortcut icon" href="assets/images/favicon.ico">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 selection:bg-amber-100 selection:text-amber-900">
+
+  <!-- Top Announcement Bar with Animated Flowing Boundary -->
+  <div class="top-animated-boundary bg-slate-950 text-slate-300 text-xs py-2.5 px-4 border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 uppercase">Alumni Network</span>
+        <span>5,800+ Aspirants Trained • Strict Merit-Based Pedagogy • Verified Preparation Journeys</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs font-medium">
+        <span class="text-amber-400 font-mono">* Demo Fictional Cohort Showcase</span>
+        <span class="text-slate-700">|</span>
+        <a href="tel:+911140928739" class="hover:text-amber-400 transition-colors">Desk: +91 (011) 4982-APEX</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Primary Sticky Navigation Bar -->
+  <header id="main-navbar" class="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200 transition-all duration-300">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-20">
+        
+        <!-- Logo -->
+        <a href="index.html" class="flex items-center gap-3.5 group" aria-label="APEX ACADEMY Homepage">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-10 sm:h-11 w-auto object-contain transition-transform duration-300 group-hover:scale-105"
+          />
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-display font-extrabold text-xl tracking-tight text-slate-950">APEX</span>
+              <span class="font-display font-bold text-xl tracking-tight text-amber-600">ACADEMY</span>
+            </div>
+            <p class="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Excellence in Competitive Exams</p>
+          </div>
+        </a>
+
+        <nav class="hidden md:flex items-center gap-8 text-sm">
+          <a href="index.html" class="nav-link font-medium">Home</a>
+          <a href="about.html" class="nav-link font-medium">About Institute</a>
+          <a href="courses.html" class="nav-link font-medium">Courses & Programs</a>
+          <a href="success-stories.html" class="nav-link font-medium active">Success Stories</a>
+          <a href="enquiry.html" class="nav-link font-medium">Admission Enquiry</a>
+        </nav>
+
+        <div class="hidden lg:flex items-center gap-3">
+          <a href="book-counselling.html" class="btn-primary-gold px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center gap-2 hover-lift">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            Book Free Call
+          </a>
+        </div>
+
+        <div class="flex md:hidden">
+          <button id="mobile-menu-btn" type="button" class="p-2 rounded-lg text-slate-700 hover:bg-slate-100 focus:outline-none" aria-label="Open Navigation">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer Menu -->
+  <div id="mobile-backdrop" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 opacity-0 pointer-events-none transition-opacity duration-300 md:hidden"></div>
+  <div id="mobile-drawer" class="fixed top-0 right-0 w-80 max-w-full h-full bg-white z-50 shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out md:hidden flex flex-col justify-between p-6">
+    <div>
+      <div class="flex items-center justify-between pb-6 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-9 w-auto object-contain"
+          />
+          <div>
+            <span class="font-display font-bold text-lg text-slate-900">APEX ACADEMY</span>
+            <p class="text-[10px] text-slate-500 uppercase">Competitive Exams</p>
+          </div>
+        </div>
+        <button id="mobile-close-btn" class="p-2 text-slate-400 hover:text-slate-800" aria-label="Close menu">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <nav class="flex flex-col gap-4 mt-6 text-base font-medium text-slate-800">
+        <a href="index.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Home</a>
+        <a href="about.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">About the Institute</a>
+        <a href="courses.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Courses & Programs</a>
+        <a href="success-stories.html" class="py-2.5 px-3 rounded-lg bg-amber-50 text-amber-900 font-semibold">Success Stories</a>
+        <a href="enquiry.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Admission Enquiry</a>
+      </nav>
+    </div>
+
+    <div class="pt-6 border-t border-slate-100 flex flex-col gap-3">
+      <a href="book-counselling.html" class="btn-primary-gold w-full text-center py-3 rounded-xl font-semibold text-sm">
+        Book Free Counselling Call
+      </a>
+    </div>
+  </div>
+
+  <!-- Breadcrumbs -->
+  <div class="bg-white border-b border-slate-200 py-3 px-4">
+    <div class="max-w-7xl mx-auto flex items-center gap-2 text-xs">
+      <a href="index.html" class="breadcrumb-item">Home</a>
+      <span class="text-slate-400">/</span>
+      <span class="breadcrumb-active">Success Stories & Results</span>
+    </div>
+  </div>
+
+  <!-- HERO SECTION WITH TRANSPARENCY NOTICE -->
+  <section class="bg-slate-950 text-white py-16 md:py-20 pattern-grid-dark relative overflow-hidden">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      
+      <!-- Fictional Demo Banner -->
+      <div class="mb-6 inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
+        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span class="font-bold uppercase tracking-wider">Demo Content Label:</span>
+        <span class="text-slate-300">Student names, ranks, and quotes on this page represent simulated alumni profiles for design demonstration.</span>
+      </div>
+
+      <div class="max-w-3xl space-y-4">
+        <h1 class="font-display text-4xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
+          How Disciplined Aspirants Transformed Into <span class="gold-gradient-text">Commissioned Officers</span>.
+        </h1>
+        <p class="text-base sm:text-lg text-slate-300 leading-relaxed">
+          Read transparent, unedited preparation accounts: the mock test score crashes, calculation speed breakthroughs, and specific study schedules that led to selection.
+        </p>
+
+        <!-- Filter Buttons -->
+        <div class="pt-6 flex flex-wrap gap-2.5" id="story-filter-container">
+          <button type="button" class="story-filter-btn px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 text-slate-950 shadow hover-lift" data-story-filter="all">
+            All Journeys (4)
+          </button>
+          <button type="button" class="story-filter-btn px-4 py-2 rounded-lg text-xs font-bold bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover-lift" data-story-filter="ssc">
+            SSC CGL & CHSL Rankers
+          </button>
+          <button type="button" class="story-filter-btn px-4 py-2 rounded-lg text-xs font-bold bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover-lift" data-story-filter="banking">
+            Banking PO Officers
+          </button>
+          <button type="button" class="story-filter-btn px-4 py-2 rounded-lg text-xs font-bold bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover-lift" data-story-filter="working">
+            Working Professionals
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- SUCCESS STORIES DETAILED GRID -->
+  <section class="py-20 bg-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+        
+        <!-- Story 1: Rohan K. Verma -->
+        <div class="story-card editorial-card p-8 flex flex-col justify-between reveal-on-scroll" data-category="ssc">
+          <div class="space-y-6">
+            
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex items-center gap-4">
+                <img 
+                  src="https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=300&q=80" 
+                  alt="Rohan K Verma Profile" 
+                  class="w-16 h-16 rounded-2xl object-cover border-2 border-amber-500 shadow-md"
+                />
+                <div>
+                  <h3 class="font-display font-extrabold text-xl text-slate-950">Rohan K. Verma <span class="text-xs font-normal text-slate-500">(Demo)</span></h3>
+                  <p class="text-xs font-bold text-amber-700 font-mono mt-0.5">AIR 14 • SSC CGL Examination</p>
+                  <p class="text-[11px] text-slate-500">Allocated: Assistant Section Officer (CSS)</p>
+                </div>
+              </div>
+              <span class="badge-gold px-2.5 py-1 rounded text-[10px] font-bold uppercase shrink-0">SSC CGL</span>
+            </div>
+
+            <!-- Preparation Journey Metrics -->
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center text-xs">
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Initial Mock Score</span>
+                <span class="font-bold text-slate-800">114 / 200</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Final Exam Score</span>
+                <span class="font-bold text-emerald-700">186.5 / 200</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Preparation Span</span>
+                <span class="font-bold text-slate-800">9 Months</span>
+              </div>
+            </div>
+
+            <!-- Journey Narrative -->
+            <div class="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
+              <p>
+                <strong>The Bottleneck:</strong> "My mathematics knowledge was theoretical. In timed mocks, I would spend nearly 2.5 minutes on geometry and algebra questions, leaving only 12 minutes for the entire English comprehension section."
+              </p>
+              <p>
+                <strong>Apex Mentorship Turning Point:</strong> "Prof. Arvind Sharma put me in the speed lab drills for 3 weeks where we solved questions purely using value substitution and option rejection heuristics. My time per math question plunged from 140s to 42s."
+              </p>
+              <blockquote class="p-3 bg-amber-50 border-l-4 border-amber-500 text-xs italic text-amber-900 rounded-r-lg">
+                "Apex doesn't sell you false motivation. They give you a timer, an Excel error tracker, and unvarnished truth every Monday morning."
+              </blockquote>
+            </div>
+
+          </div>
+
+          <div class="pt-6 mt-6 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Enrolled Batch: Super-45 Delhi Offline</span>
+            <a href="enquiry.html?course=ssc-cgl" class="font-bold text-amber-700 hover:text-amber-800">Enquire for Similar Track →</a>
+          </div>
+        </div>
+
+        <!-- Story 2: Sneha Mukhopadhyay -->
+        <div class="story-card editorial-card p-8 flex flex-col justify-between reveal-on-scroll" data-category="banking">
+          <div class="space-y-6">
+            
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex items-center gap-4">
+                <img 
+                  src="https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80" 
+                  alt="Sneha Mukhopadhyay Profile" 
+                  class="w-16 h-16 rounded-2xl object-cover border-2 border-blue-600 shadow-md"
+                />
+                <div>
+                  <h3 class="font-display font-extrabold text-xl text-slate-950">Sneha Mukhopadhyay <span class="text-xs font-normal text-slate-500">(Demo)</span></h3>
+                  <p class="text-xs font-bold text-blue-700 font-mono mt-0.5">AIR 03 • SBI PO Examination</p>
+                  <p class="text-[11px] text-slate-500">Allocated: Probationary Officer, State Bank of India</p>
+                </div>
+              </div>
+              <span class="badge-navy px-2.5 py-1 rounded text-[10px] font-bold uppercase shrink-0">Banking PO</span>
+            </div>
+
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center text-xs">
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Background</span>
+                <span class="font-bold text-slate-800">B.A. Literature</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Interview Score</span>
+                <span class="font-bold text-emerald-700">48 / 50</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Mocks Solved</span>
+                <span class="font-bold text-slate-800">114 Full Mocks</span>
+              </div>
+            </div>
+
+            <div class="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
+              <p>
+                <strong>The Bottleneck:</strong> "Coming from English literature, banking Data Interpretation and balance sheet reasoning sounded like Greek. I was paralyzed by high-level puzzles."
+              </p>
+              <p>
+                <strong>Apex Mentorship Turning Point:</strong> "Vikramaditya Sir broke puzzles into 4 standard geometric layouts. He made me solve 10 puzzles every single morning before touching any other topic. By month four, I was solving SBI Mains DI caselets effortlessly."
+              </p>
+              <blockquote class="p-3 bg-blue-50 border-l-4 border-blue-600 text-xs italic text-blue-900 rounded-r-lg">
+                "The mock interview with retired SBI General Managers at Apex was harder than the real interview. When I walked into the SBI boardroom, I had zero nervousness."
+              </blockquote>
+            </div>
+
+          </div>
+
+          <div class="pt-6 mt-6 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Enrolled Batch: Banking Officer Cohort</span>
+            <a href="enquiry.html?course=banking-po" class="font-bold text-blue-700 hover:text-blue-800">Enquire for Similar Track →</a>
+          </div>
+        </div>
+
+        <!-- Story 3: Karthik Subramanian (Working Professional) -->
+        <div class="story-card editorial-card p-8 flex flex-col justify-between reveal-on-scroll" data-category="working">
+          <div class="space-y-6">
+            
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex items-center gap-4">
+                <img 
+                  src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80" 
+                  alt="Karthik Subramanian Profile" 
+                  class="w-16 h-16 rounded-2xl object-cover border-2 border-emerald-600 shadow-md"
+                />
+                <div>
+                  <h3 class="font-display font-extrabold text-xl text-slate-950">Karthik Subramanian <span class="text-xs font-normal text-slate-500">(Demo)</span></h3>
+                  <p class="text-xs font-bold text-emerald-700 font-mono mt-0.5">AIR 88 • SSC CGL (Cleared While Working)</p>
+                  <p class="text-[11px] text-slate-500">Allocated: Inspector of Central Excise (CBIC)</p>
+                </div>
+              </div>
+              <span class="badge-emerald px-2.5 py-1 rounded text-[10px] font-bold uppercase shrink-0">Working Aspirant</span>
+            </div>
+
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center text-xs">
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Daily Study Window</span>
+                <span class="font-bold text-slate-800">4 Hours Max</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Mode</span>
+                <span class="font-bold text-slate-800">Live Hybrid + Notes</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Tier-2 Rank</span>
+                <span class="font-bold text-emerald-700">Top 0.05%</span>
+              </div>
+            </div>
+
+            <div class="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
+              <p>
+                <strong>The Bottleneck:</strong> "Working 9 hours at an IT consulting firm, I had no time to watch 8 hours of daily video lectures. I needed hyper-condensed high-yield material."
+              </p>
+              <p>
+                <strong>Apex Mentorship Turning Point:</strong> "Apex's Weekend Executive Cohort and curated 15-minute daily dossiers allowed me to complete 100% of the syllabus on Saturdays and Sundays, while spending 60 minutes on weekday mornings purely on speed testing."
+              </p>
+              <blockquote class="p-3 bg-emerald-50 border-l-4 border-emerald-600 text-xs italic text-emerald-900 rounded-r-lg">
+                "For working professionals, efficiency is everything. Apex eliminated 80% of unnecessary noise."
+              </blockquote>
+            </div>
+
+          </div>
+
+          <div class="pt-6 mt-6 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Enrolled Batch: Weekend Hybrid Batch</span>
+            <a href="enquiry.html?course=ssc-cgl" class="font-bold text-emerald-700 hover:text-emerald-800">Enquire for Similar Track →</a>
+          </div>
+        </div>
+
+        <!-- Story 4: Amanpreet Singh (CHSL) -->
+        <div class="story-card editorial-card p-8 flex flex-col justify-between reveal-on-scroll" data-category="ssc">
+          <div class="space-y-6">
+            
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex items-center gap-4">
+                <img 
+                  src="https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=300&q=80" 
+                  alt="Amanpreet Singh Profile" 
+                  class="w-16 h-16 rounded-2xl object-cover border-2 border-amber-500 shadow-md"
+                />
+                <div>
+                  <h3 class="font-display font-extrabold text-xl text-slate-950">Amanpreet Singh <span class="text-xs font-normal text-slate-500">(Demo)</span></h3>
+                  <p class="text-xs font-bold text-amber-700 font-mono mt-0.5">AIR 52 • SSC CHSL Examination</p>
+                  <p class="text-[11px] text-slate-500">Allocated: Junior Secretariat Assistant (Ministry of Defence)</p>
+                </div>
+              </div>
+              <span class="badge-gold px-2.5 py-1 rounded text-[10px] font-bold uppercase shrink-0">SSC CHSL</span>
+            </div>
+
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center text-xs">
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Tier-1 Raw Score</span>
+                <span class="font-bold text-emerald-700">182 / 200</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Typing Speed</span>
+                <span class="font-bold text-slate-800">46 WPM</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Age</span>
+                <span class="font-bold text-slate-800">20 Years</span>
+              </div>
+            </div>
+
+            <div class="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
+              <p>
+                <strong>The Bottleneck:</strong> "I had negative marks in English sentence correction and English comprehension. I was guessing on grammar rules."
+              </p>
+              <p>
+                <strong>Apex Mentorship Turning Point:</strong> "Ms. Meera Nambiar's structural grammar deconstruction made grammatical idioms predictable. In the actual CHSL exam, I scored a perfect 50/50 in English."
+              </p>
+              <blockquote class="p-3 bg-amber-50 border-l-4 border-amber-500 text-xs italic text-amber-900 rounded-r-lg">
+                "Starting early gave me the edge. I got my central government appointment letter within 14 months of leaving school."
+              </blockquote>
+            </div>
+
+          </div>
+
+          <div class="pt-6 mt-6 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Enrolled Batch: CHSL Speed Cohort</span>
+            <a href="enquiry.html?course=ssc-chsl" class="font-bold text-amber-700 hover:text-amber-800">Enquire for Similar Track →</a>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- INTERACTIVE VIDEO-STYLE INTERVIEW MODAL PREVIEW SECTION -->
+  <section class="py-20 bg-slate-950 text-white pattern-grid-dark reveal-on-scroll">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+      
+      <div class="text-center max-w-3xl mx-auto space-y-3">
+        <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">STUDENT SUCCESS STORIES</span>
+        <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-white">
+          Real Stories. Inspiring Journeys.
+        </h2>
+        <p class="text-sm sm:text-base text-slate-400">
+          Discover the preparation journeys, experiences and lessons shared by successful aspirants.
+        </p>
+      </div>
+
+      <!-- Feature Video Style Card -->
+      <div class="dark-card p-6 sm:p-8 border border-slate-800 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        
+        <div class="lg:col-span-7 relative rounded-xl overflow-hidden aspect-video bg-slate-900 group cursor-pointer" onclick="openVideoDemoModal()">
+          <img 
+            src="assets/images/rahul-verma-thumbnail.jpg" 
+            alt="Rahul Verma - Apex Success Story #01" 
+            class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
+          />
+          <div class="absolute inset-0 bg-slate-950/40 flex items-center justify-center">
+            <div class="w-16 h-16 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-2xl shadow-2xl group-hover:scale-110 transition-transform pl-1">
+              ▶
+            </div>
+          </div>
+          <div class="absolute bottom-4 left-4 right-4 flex justify-between items-center text-xs text-white bg-slate-950/80 px-3 py-1.5 rounded backdrop-blur">
+            <span>APEX SUCCESS STORY #01 • Rahul Verma</span>
+            <span class="font-mono text-amber-400">00:32 Min</span>
+          </div>
+        </div>
+
+        <div class="lg:col-span-5 space-y-4">
+          <span class="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono">APEX SUCCESS STORY #01</span>
+          <h3 class="font-display font-extrabold text-2xl text-white">
+            From Preparation to Achievement – Rahul Verma's Journey
+          </h3>
+          <p class="text-xs sm:text-sm text-slate-300 leading-relaxed">
+            Meet Rahul Verma as he shares his preparation journey, the challenges he faced and the importance of structured learning, regular mock tests and consistent guidance.
+          </p>
+
+          <div class="pt-2 space-y-2 text-xs text-slate-400">
+            <div class="flex items-center gap-2">✓ Preparation Journey – Overcoming challenges and staying dedicated.</div>
+            <div class="flex items-center gap-2">✓ Study Strategy – Structured planning and regular mock tests.</div>
+            <div class="flex items-center gap-2">✓ Message to Aspirants – Consistency, confidence and continuous improvement.</div>
+          </div>
+
+          <div class="pt-4">
+            <button type="button" onclick="openVideoDemoModal()" class="btn-primary-gold px-6 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 hover-lift">
+              Watch Success Story
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- VIDEO DEMO MODAL -->
+  <div id="video-demo-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full p-6 text-white space-y-4 relative shadow-2xl">
+      <button onclick="closeVideoDemoModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-lg font-bold p-1 rounded-lg hover:bg-slate-800 transition-colors" aria-label="Close modal">✕</button>
+      
+      <div class="flex items-center gap-3">
+        <span class="badge-gold px-2.5 py-1 rounded text-[10px] font-bold">APEX SUCCESS STORY #01</span>
+        <span class="text-xs text-slate-400 font-mono">Rahul Verma • 00:32 Min</span>
+      </div>
+
+      <div class="aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 relative">
+        <video id="success-story-video" class="w-full h-full object-contain" controls preload="metadata" poster="assets/images/rahul-verma-thumbnail.jpg">
+          <source src="assets/videos/rahul-verma-success-story.mp4" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-2">
+        <span class="text-xs text-slate-300">From Preparation to Achievement – Rahul Verma's Journey</span>
+        <div class="flex gap-3">
+          <button type="button" onclick="closeVideoDemoModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg transition-colors">Close Video</button>
+          <a href="book-counselling.html" class="btn-primary-gold px-5 py-2 text-xs font-bold rounded-lg hover-lift">Discuss With Academic Mentor</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FINAL CTA -->
+  <section class="py-16 bg-white border-t border-slate-200 reveal-on-scroll">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
+      <h2 class="font-display text-3xl sm:text-4xl font-extrabold text-slate-950">
+        Ready to Write Your Own Success Story?
+      </h2>
+      <p class="text-sm text-slate-600 max-w-xl mx-auto">
+        Join our next 45-student cohort. Get your baseline evaluated by our Chief Academic Director.
+      </p>
+      <div class="flex flex-col sm:flex-row justify-center items-center gap-4 pt-2">
+        <a href="enquiry.html" class="btn-primary-navy px-8 py-3.5 rounded-xl font-bold text-sm hover-lift">
+          Submit Admission Enquiry
+        </a>
+        <a href="book-counselling.html" class="btn-primary-gold px-8 py-3.5 rounded-xl font-bold text-sm hover-lift">
+          Book Free Counselling Call
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="bg-slate-950 text-slate-400 text-sm border-t border-slate-900 pt-16 pb-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="mb-12 p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span class="font-semibold text-slate-200">PORTFOLIO DEMONSTRATION NOTICE:</span>
+          <span>Apex Academy is a fictional coaching institute prototype created for web design demonstration.</span>
+        </div>
+        <span class="text-[11px] text-amber-500/90 font-mono">Frontend Showcase Model</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10 pb-12 border-b border-slate-900">
+        <div class="lg:col-span-2 space-y-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-white flex items-center justify-center p-1.5 shadow">
+              <img src="assets/images/apex-logo-clean.png" alt="APEX ACADEMY" class="w-full h-full object-contain" />
+            </div>
+            <div>
+              <span class="font-display font-extrabold text-xl text-white tracking-tight">APEX ACADEMY</span>
+              <p class="text-[10px] uppercase tracking-widest text-amber-500 font-semibold">Institute for Competitive Exams</p>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed max-w-sm">
+            Setting the gold standard for SSC CGL, CHSL, and Banking examination mentoring in India.
+          </p>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Quick Navigation</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="index.html" class="hover:text-amber-400">Home Page</a></li>
+            <li><a href="about.html" class="hover:text-amber-400">About the Institute</a></li>
+            <li><a href="courses.html" class="hover:text-amber-400">Courses & Programs</a></li>
+            <li><a href="success-stories.html" class="hover:text-amber-400">Success Stories & Results</a></li>
+            <li><a href="enquiry.html" class="hover:text-amber-400">Admission Enquiry</a></li>
+            <li><a href="book-counselling.html" class="hover:text-amber-400">Book Free Counselling</a></li>
+          </ul>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Examination Streams</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="courses.html#civil-services-ssc" class="hover:text-amber-400">Civil Services & SSC Preparation</a></li>
+            <li><a href="courses.html#banking-railway" class="hover:text-amber-400">Banking & Railway Preparation</a></li>
+            <li><a href="courses.html#foundation" class="hover:text-amber-400">APEX Foundation Program</a></li>
+          </ul>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Campus Details</h4>
+          <div class="text-xs space-y-1.5 text-slate-400">
+            <p><span class="text-white">Flagship Center:</span> Connaught Place, New Delhi</p>
+            <p><span class="text-white">Helpline:</span> +91 (011) 4982-APEX</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-4">
+        <p>© 2026 APEX ACADEMY. All rights reserved. Designed for Excellence.</p>
+        <div class="flex gap-6">
+          <a href="#" class="hover:text-slate-300">Privacy Policy</a>
+          <a href="#" class="hover:text-slate-300">Terms of Admission</a>
+        </div>
+      </div>
+
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+  <script>
+    // Story Filter Logic
+    document.querySelectorAll('.story-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.story-filter-btn').forEach(b => {
+          b.classList.remove('bg-amber-500', 'text-slate-950');
+          b.classList.add('bg-slate-900', 'text-slate-300', 'border', 'border-slate-700');
+        });
+        btn.classList.add('bg-amber-500', 'text-slate-950');
+        btn.classList.remove('bg-slate-900', 'text-slate-300', 'border', 'border-slate-700');
+
+        const filter = btn.getAttribute('data-story-filter');
+        document.querySelectorAll('.story-card').forEach(card => {
+          if (filter === 'all' || card.getAttribute('data-category') === filter) {
+            card.classList.remove('hidden');
+          } else {
+            card.classList.add('hidden');
+          }
+        });
+      });
+    });
+
+    // Video modal handlers
+    function openVideoDemoModal() {
+      const modal = document.getElementById('video-demo-modal');
+      const video = document.getElementById('success-story-video');
+      if (modal) modal.classList.remove('hidden');
+      if (video) {
+        video.play().catch(function() {
+          // Autoplay policy fallback (user can click play on controls)
+        });
+      }
+    }
+    function closeVideoDemoModal() {
+      const modal = document.getElementById('video-demo-modal');
+      const video = document.getElementById('success-story-video');
+      if (modal) modal.classList.add('hidden');
+      if (video) {
+        video.pause();
+      }
+    }
+
+    // Close modal on backdrop click or Escape key
+    const videoModal = document.getElementById('video-demo-modal');
+    if (videoModal) {
+      videoModal.addEventListener('click', function(e) {
+        if (e.target === this) {
+          closeVideoDemoModal();
+        }
+      });
+    }
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeVideoDemoModal();
+      }
+    });
+  </script>
+</body>
+</html>

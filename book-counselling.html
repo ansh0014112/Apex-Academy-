@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book a Free 1-on-1 Academic Counselling Call | Apex Academy</title>
+  <meta name="description" content="Reserve a complimentary 30-minute strategic counseling call with an Apex Academy Senior Mentor. Get personalized syllabus breakdown and exam roadmap.">
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              navy: '#0A1128',
+              navyLight: '#142042',
+              royal: '#1E3A8A',
+              gold: '#D97706',
+              goldHover: '#B45309',
+              goldLight: '#FEF3C7',
+              slateBg: '#F8FAFC'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="assets/images/favicon.png">
+  <link rel="shortcut icon" href="assets/images/favicon.ico">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 selection:bg-amber-100 selection:text-amber-900">
+
+  <!-- Top Announcement Bar with Animated Flowing Boundary -->
+  <div class="top-animated-boundary bg-slate-950 text-slate-300 text-xs py-2.5 px-4 border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 uppercase">Zero Cost Guidance</span>
+        <span>100% Free Strategic Counselling Session • No Sales Pressure • Objective Diagnostic Audit</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs font-medium">
+        <span class="text-amber-400 font-mono">* Demo Scheduling Simulation</span>
+        <span class="text-slate-700">|</span>
+        <a href="tel:+911140928739" class="hover:text-amber-400 transition-colors">Counselor Desk: +91 (011) 4982-APEX</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Primary Sticky Navigation Bar -->
+  <header id="main-navbar" class="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200 transition-all duration-300">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-20">
+        
+        <!-- Logo -->
+        <a href="index.html" class="flex items-center gap-3.5 group" aria-label="APEX ACADEMY Homepage">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-10 sm:h-11 w-auto object-contain transition-transform duration-300 group-hover:scale-105"
+          />
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-display font-extrabold text-xl tracking-tight text-slate-950">APEX</span>
+              <span class="font-display font-bold text-xl tracking-tight text-amber-600">ACADEMY</span>
+            </div>
+            <p class="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">Excellence in Competitive Exams</p>
+          </div>
+        </a>
+
+        <nav class="hidden md:flex items-center gap-8 text-sm">
+          <a href="index.html" class="nav-link font-medium">Home</a>
+          <a href="about.html" class="nav-link font-medium">About Institute</a>
+          <a href="courses.html" class="nav-link font-medium">Courses & Programs</a>
+          <a href="success-stories.html" class="nav-link font-medium">Success Stories</a>
+          <a href="enquiry.html" class="nav-link font-medium">Admission Enquiry</a>
+        </nav>
+
+        <div class="hidden lg:flex items-center gap-3">
+          <a href="book-counselling.html" class="btn-primary-gold px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center gap-2 hover-lift">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            Book Free Call
+          </a>
+        </div>
+
+        <div class="flex md:hidden">
+          <button id="mobile-menu-btn" type="button" class="p-2 rounded-lg text-slate-700 hover:bg-slate-100 focus:outline-none" aria-label="Open Navigation">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer Menu -->
+  <div id="mobile-backdrop" class="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 opacity-0 pointer-events-none transition-opacity duration-300 md:hidden"></div>
+  <div id="mobile-drawer" class="fixed top-0 right-0 w-80 max-w-full h-full bg-white z-50 shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out md:hidden flex flex-col justify-between p-6">
+    <div>
+      <div class="flex items-center justify-between pb-6 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <img 
+            src="assets/images/apex-logo-clean.png" 
+            alt="APEX ACADEMY Logo" 
+            class="h-9 w-auto object-contain"
+          />
+          <div>
+            <span class="font-display font-bold text-lg text-slate-900">APEX ACADEMY</span>
+            <p class="text-[10px] text-slate-500 uppercase">Competitive Exams</p>
+          </div>
+        </div>
+        <button id="mobile-close-btn" class="p-2 text-slate-400 hover:text-slate-800" aria-label="Close menu">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <nav class="flex flex-col gap-4 mt-6 text-base font-medium text-slate-800">
+        <a href="index.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Home</a>
+        <a href="about.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">About the Institute</a>
+        <a href="courses.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Courses & Programs</a>
+        <a href="success-stories.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Success Stories</a>
+        <a href="enquiry.html" class="py-2.5 px-3 rounded-lg hover:bg-slate-50">Admission Enquiry</a>
+      </nav>
+    </div>
+
+    <div class="pt-6 border-t border-slate-100 flex flex-col gap-3">
+      <a href="book-counselling.html" class="btn-primary-gold w-full text-center py-3 rounded-xl font-semibold text-sm">
+        Book Free Counselling Call
+      </a>
+    </div>
+  </div>
+
+  <!-- Breadcrumbs -->
+  <div class="bg-white border-b border-slate-200 py-3 px-4">
+    <div class="max-w-7xl mx-auto flex items-center gap-2 text-xs">
+      <a href="index.html" class="breadcrumb-item">Home</a>
+      <span class="text-slate-400">/</span>
+      <span class="breadcrumb-active">Book Free Counselling Call</span>
+    </div>
+  </div>
+
+  <!-- HERO SECTION -->
+  <section class="bg-slate-950 text-white py-16 md:py-20 pattern-grid-dark relative overflow-hidden">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="max-w-3xl space-y-4">
+        <span class="badge-gold px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Strategic Mentorship</span>
+        <h1 class="font-display text-4xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
+          Reserve Your Free 30-Minute <span class="gold-gradient-text">Exam Strategy Audit</span>.
+        </h1>
+        <p class="text-base sm:text-lg text-slate-300 leading-relaxed">
+          Speak 1-on-1 with a senior competitive exam counselor. We will analyze your target exam cutoff trends, audit your current calculation speed, and map a personalized daily study timetable.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCHEDULING STUDIO SECTION (INTERACTIVE 2-COLUMN) -->
+  <section class="py-16 md:py-20 bg-slate-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+        
+        <!-- LEFT COLUMN: WHAT HAPPENS IN THE CALL & VALUE PROPOSITION -->
+        <div class="lg:col-span-5 space-y-8">
+          
+          <div class="editorial-card p-8 space-y-6">
+            <span class="badge-navy px-3 py-1 rounded text-xs font-bold uppercase tracking-wider">The 30-Minute Agenda</span>
+            <h3 class="font-display font-extrabold text-2xl text-slate-950">
+              What You Will Gain From This Session:
+            </h3>
+
+            <div class="space-y-4 text-xs sm:text-sm text-slate-700">
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  01
+                </div>
+                <div>
+                  <strong class="text-slate-950 block">Baseline Exam Diagnostic Audit</strong>
+                  <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Evaluation of your strong and weak areas across Arithmetic, Reasoning, and Comprehension.</p>
+                </div>
+              </div>
+
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  02
+                </div>
+                <div>
+                  <strong class="text-slate-950 block">Personalized 300-Day Study Timetable</strong>
+                  <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">A realistic hour-by-hour schedule tailored to whether you are a college student, full-time aspirant, or working professional.</p>
+                </div>
+              </div>
+
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  03
+                </div>
+                <div>
+                  <strong class="text-slate-950 block">Official TCS-iON Cutoff Analysis</strong>
+                  <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Exact score and safe-attempt targets required for your preferred ministry or bank scale-1 vacancy.</p>
+                </div>
+              </div>
+
+              <div class="flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center font-bold text-xs shrink-0 mt-0.5">
+                  04
+                </div>
+                <div>
+                  <strong class="text-slate-950 block">Free CBT Speed Lab Pass Voucher</strong>
+                  <p class="text-slate-500 text-xs mt-0.5 leading-relaxed">Complimentary pass to take an All-India mock test in our New Delhi computer laboratory or online.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="pt-4 border-t border-slate-100 flex items-center gap-3">
+              <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80" alt="Mentor" class="w-10 h-10 rounded-full object-cover">
+              <div class="text-xs">
+                <p class="font-bold text-slate-900">Assigned Senior Counselor</p>
+                <p class="text-slate-500">Ex-Civil Service / Banking Faculty Lead</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Integrity Promise Box -->
+          <div class="bg-amber-50 border border-amber-200/80 rounded-2xl p-6 text-xs text-amber-900 space-y-2">
+            <h4 class="font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+              <span>🛡️</span> Apex Academic Promise
+            </h4>
+            <p class="leading-relaxed">
+              This is an academic counselling dialogue, not a sales call. If our courses are not the right fit for your current stage, our mentor will objectively advise alternative self-study booklists.
+            </p>
+          </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN: SCHEDULING FORM & CONFIRMATION PASS (INTERACTIVE FRONTEND) -->
+        <div class="lg:col-span-7">
+          
+          <!-- BOOKING FORM WRAPPER -->
+          <div id="booking-form-wrapper" class="bg-white rounded-2xl p-8 sm:p-10 border border-slate-200 shadow-xl space-y-8">
+            
+            <div class="border-b border-slate-100 pb-5">
+              <span class="text-xs uppercase font-mono tracking-wider text-amber-700 font-bold">Step 1: Choose Your Slot</span>
+              <h2 class="font-display text-2xl font-extrabold text-slate-950 mt-1">Select Date & Time Window</h2>
+              <p class="text-xs sm:text-sm text-slate-500 mt-1">Sessions run for 30 minutes via Google Meet Video or Direct Telephonic Line.</p>
+            </div>
+
+            <form id="counselling-booking-form" novalidate class="space-y-7">
+              
+              <!-- 1. Interactive Date Picker -->
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2.5">
+                  1. Select Preferred Date <span class="text-red-500">*</span>
+                </label>
+                <input type="hidden" id="selected-date-input" value="">
+                
+                <!-- Dynamic 7 Days Picker injected by booking.js -->
+                <div id="date-picker-container" class="flex gap-2.5 overflow-x-auto pb-2 scrollbar-none">
+                  <!-- Injected by booking.js -->
+                </div>
+                <p id="selected-date-input-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+              </div>
+
+              <!-- 2. Interactive Time Slot Chips -->
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2.5">
+                  2. Select Available Time Slot <span class="text-red-500">*</span>
+                </label>
+                <input type="hidden" id="selected-slot-input" value="">
+
+                <!-- slot-buttons-container: booking.js dynamically populates with real-time
+                     Supabase availability. Static buttons serve as offline fallback. -->
+                <div id="slot-buttons-container" class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-amber-600 text-white border-amber-600 ring-2 ring-amber-200" data-slot="10:30 AM - 11:00 AM">
+                    10:30 AM - 11:00 AM
+                  </button>
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-white text-slate-700 border-slate-200 hover:border-slate-400" data-slot="12:00 PM - 12:30 PM">
+                    12:00 PM - 12:30 PM
+                  </button>
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-white text-slate-700 border-slate-200 hover:border-slate-400" data-slot="03:00 PM - 03:30 PM">
+                    03:00 PM - 03:30 PM
+                  </button>
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-white text-slate-700 border-slate-200 hover:border-slate-400" data-slot="05:00 PM - 05:30 PM">
+                    05:00 PM - 05:30 PM
+                  </button>
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-white text-slate-700 border-slate-200 hover:border-slate-400" data-slot="06:30 PM - 07:00 PM">
+                    06:30 PM - 07:00 PM
+                  </button>
+                  <button type="button" class="time-slot-btn p-3 rounded-xl border text-xs font-semibold text-center transition-all bg-white text-slate-700 border-slate-200 hover:border-slate-400" data-slot="07:30 PM - 08:00 PM">
+                    07:30 PM - 08:00 PM
+                  </button>
+                </div>
+                <p id="selected-slot-input-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+              </div>
+
+              <!-- 3. Aspirant Details -->
+              <div class="border-t border-slate-100 pt-6 space-y-5">
+                <span class="text-xs uppercase font-mono tracking-wider text-amber-700 font-bold block">Step 2: Aspirant Profile</span>
+                
+                <div>
+                  <label for="booking-name" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                    Your Full Name <span class="text-red-500">*</span>
+                  </label>
+                  <input type="text" id="booking-name" placeholder="e.g. Priyadarshini Rao" class="form-input-premium" required>
+                  <p id="booking-name-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div>
+                    <label for="booking-phone" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                      Mobile Number <span class="text-red-500">*</span>
+                    </label>
+                    <div class="relative">
+                      <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 border-r border-slate-200 pr-2">+91</span>
+                      <input type="tel" id="booking-phone" placeholder="98765 43210" maxlength="10" class="form-input-premium pl-14" required>
+                    </div>
+                    <p id="booking-phone-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+                  </div>
+
+                  <div>
+                    <label for="booking-email" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                      Email Address <span class="text-red-500">*</span>
+                    </label>
+                    <input type="email" id="booking-email" placeholder="priya@example.com" class="form-input-premium" required>
+                    <p id="booking-email-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+                  </div>
+                </div>
+
+                <!-- Course Category & Target Exam Selection -->
+                <div class="space-y-5">
+                  <div>
+                    <label for="booking-course-category" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                      Course Category <span class="text-red-500">*</span>
+                    </label>
+                    <select id="booking-course-category" class="form-input-premium" required>
+                      <option value="">-- Select Course Category --</option>
+                      <option value="civil-services-ssc">Civil Services & SSC Exam Preparation</option>
+                      <option value="banking-railway">Banking & Railway Exam Preparation</option>
+                      <option value="foundation">APEX Foundation Program</option>
+                    </select>
+                    <p id="booking-course-category-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <div>
+                      <label for="booking-exam" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                        Target Specific Examination <span class="text-red-500">*</span>
+                      </label>
+                      <select id="booking-exam" class="form-input-premium" required>
+                        <option value="">-- First Select Course Category --</option>
+                        <!-- Populated dynamically via courses-data.js -->
+                      </select>
+                      <p id="booking-exam-error" class="hidden text-xs text-red-600 mt-1.5 font-medium"></p>
+                    </div>
+
+                    <div>
+                      <label for="counselling-mode" class="block text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                        Session Medium
+                      </label>
+                      <select id="counselling-mode" class="form-input-premium">
+                        <option value="Google Meet HD Video Call">Google Meet HD Video Call</option>
+                        <option value="Direct Telephonic Call (Audio)">Direct Telephonic Call (Audio)</option>
+                        <option value="In-Person at Delhi Flagship Campus">In-Person at Delhi Flagship Campus</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Booking Request Transparency Disclaimer Notice -->
+                <div class="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
+                  <span class="text-amber-700 text-base leading-none mt-0.5">ℹ️</span>
+                  <div>
+                    <strong class="font-bold block text-amber-900">Appointment Request Notice:</strong>
+                    <p class="text-amber-800 text-[11px] leading-relaxed mt-0.5">
+                      A counselling submission represents a booking request, not an instantly confirmed appointment. Our senior academic counselor will contact you within 2 business hours to confirm mentor availability.
+                    </p>
+                  </div>
+                </div>
+
+              </div>
+
+              <!-- Submit Booking Action -->
+              <div>
+                <button 
+                  type="submit" 
+                  id="booking-submit-btn" 
+                  class="btn-primary-gold w-full py-4 rounded-xl font-bold text-sm sm:text-base transition-all hover-lift flex items-center justify-center gap-2"
+                >
+                  <span>Confirm Free Counselling Call</span>
+                  <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </button>
+                <p class="text-center text-[11px] text-slate-400 mt-2 font-medium">
+                  Instant email & WhatsApp calendar invite will be dispatched upon confirmation (Demo Mode).
+                </p>
+              </div>
+
+            </form>
+
+          </div>
+
+          <!-- CONFIRMATION PASS (REVEALED ON SUBMISSION) -->
+          <div id="booking-success-wrapper" class="hidden bg-white rounded-2xl p-8 sm:p-10 border-2 border-amber-500 shadow-2xl space-y-6">
+            
+            <div class="flex items-center justify-between pb-4 border-b border-slate-200">
+              <div class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-amber-500"></span>
+                <span class="text-xs font-bold uppercase tracking-wider text-amber-800">Booking Request Received (Demo Mode)</span>
+              </div>
+              <span id="pass-id" class="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded">APX-CALL-10492</span>
+            </div>
+
+            <!-- Boarding-Pass Style Appointment Card -->
+            <div class="bg-slate-950 text-white rounded-xl p-6 relative overflow-hidden pattern-grid-dark space-y-5">
+              <div class="flex justify-between items-start">
+                <div>
+                  <span class="text-[10px] text-amber-400 font-mono uppercase tracking-widest">APEX ACADEMY • COUNSELLING PASS</span>
+                  <h3 id="pass-name" class="font-display font-extrabold text-2xl text-white mt-1">Aspirant Name</h3>
+                  <p id="pass-category" class="text-xs text-amber-300 font-semibold">Civil Services & SSC Exam Preparation</p>
+                  <p id="pass-exam" class="text-xs text-slate-400">UPSC Civil Services Examination (CSE)</p>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold text-lg font-display">
+                  30M
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-4 border-t border-slate-800 text-xs">
+                <div>
+                  <span class="text-slate-400 block text-[10px] uppercase font-bold">Scheduled Date</span>
+                  <span id="pass-date" class="font-bold text-amber-400">Selected Date</span>
+                </div>
+                <div>
+                  <span class="text-slate-400 block text-[10px] uppercase font-bold">Time Window</span>
+                  <span id="pass-time" class="font-bold text-white">10:30 AM - 11:00 AM</span>
+                </div>
+                <div>
+                  <span class="text-slate-400 block text-[10px] uppercase font-bold">Medium</span>
+                  <span id="pass-mode" class="font-bold text-slate-300">Google Meet Video</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Preparation Checklist for the Call -->
+            <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs text-slate-700">
+              <strong class="text-slate-900 block font-bold">Instructions Before Your Call:</strong>
+              <p>1. Please keep a list of your past mock test scores and target category readiness.</p>
+              <p>2. Keep a notebook handy to record your custom calculation drill roadmap.</p>
+              <p>3. If you selected Video mode, test your microphone and internet connection 5 minutes prior.</p>
+            </div>
+
+            <div class="space-y-3 pt-2">
+              <a 
+                href="https://wa.me/919876543210?text=Hello%20Apex%20Academy%2C%20I%20have%20confirmed%20my%20counselling%20call%20appointment." 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white w-full py-3.5 rounded-xl font-bold text-xs sm:text-sm text-center flex items-center justify-center gap-2 transition-all shadow-md hover-lift"
+              >
+                <span>Save Appointment Details to WhatsApp</span>
+                <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>
+              </a>
+
+              <button 
+                type="button" 
+                onclick="resetBookingFlow()" 
+                class="w-full py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors"
+              >
+                Change Date / Book Another Time Slot
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="bg-slate-950 text-slate-400 text-sm border-t border-slate-900 pt-16 pb-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      
+      <div class="mb-12 p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span class="font-semibold text-slate-200">PORTFOLIO DEMONSTRATION NOTICE:</span>
+          <span>Apex Academy is a fictional coaching institute prototype created for web design demonstration.</span>
+        </div>
+        <span class="text-[11px] text-amber-500/90 font-mono">Frontend Showcase Model</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10 pb-12 border-b border-slate-900">
+        <div class="lg:col-span-2 space-y-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-white flex items-center justify-center p-1.5 shadow">
+              <img src="assets/images/apex-logo-clean.png" alt="APEX ACADEMY" class="w-full h-full object-contain" />
+            </div>
+            <div>
+              <span class="font-display font-extrabold text-xl text-white tracking-tight">APEX ACADEMY</span>
+              <p class="text-[10px] uppercase tracking-widest text-amber-500 font-semibold">Institute for Competitive Exams</p>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed max-w-sm">
+            Setting the gold standard for SSC CGL, CHSL, and Banking examination mentoring in India.
+          </p>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Quick Navigation</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="index.html" class="hover:text-amber-400">Home Page</a></li>
+            <li><a href="about.html" class="hover:text-amber-400">About the Institute</a></li>
+            <li><a href="courses.html" class="hover:text-amber-400">Courses & Programs</a></li>
+            <li><a href="success-stories.html" class="hover:text-amber-400">Success Stories & Results</a></li>
+            <li><a href="enquiry.html" class="hover:text-amber-400">Admission Enquiry</a></li>
+            <li><a href="book-counselling.html" class="hover:text-amber-400">Book Free Counselling</a></li>
+          </ul>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Examination Streams</h4>
+          <ul class="space-y-2 text-xs">
+            <li><a href="courses.html#civil-services-ssc" class="hover:text-amber-400">Civil Services & SSC Preparation</a></li>
+            <li><a href="courses.html#banking-railway" class="hover:text-amber-400">Banking & Railway Preparation</a></li>
+            <li><a href="courses.html#foundation" class="hover:text-amber-400">APEX Foundation Program</a></li>
+          </ul>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="font-display font-bold text-sm text-white uppercase tracking-wider">Campus Details</h4>
+          <div class="text-xs space-y-1.5 text-slate-400">
+            <p><span class="text-white">Flagship Center:</span> Connaught Place, New Delhi</p>
+            <p><span class="text-white">Helpline:</span> +91 (011) 4982-APEX</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="pt-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-4">
+        <p>© 2026 APEX ACADEMY. All rights reserved. Designed for Excellence.</p>
+        <div class="flex gap-6">
+          <a href="#" class="hover:text-slate-300">Privacy Policy</a>
+          <a href="#" class="hover:text-slate-300">Terms of Admission</a>
+        </div>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- Supabase CDN & Client Bridge -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase-config.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/courses-data.js"></script>
+  <script src="js/main.js"></script>
+  <script src="js/booking.js"></script>
+</body>
+</html>

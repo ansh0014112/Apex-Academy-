@@ -1,0 +1,80 @@
+# ==========================================
+# APEX ACADEMY - GIT IGNORE
+# ==========================================
+
+# 1. ENVIRONMENT VARIABLES & SECRETS
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Secret and private credential files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+private/
+credentials/
+service-account*.json
+
+# 2. SUPABASE
+supabase/.temp/
+supabase/.branches/
+
+# Never commit private Supabase credentials
+supabase/.env
+supabase/.env.*
+
+# 3. NODE.JS & DEPENDENCIES
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# 4. DEPLOYMENT & BUILD FILES
+.netlify/
+.vercel/
+dist/
+build/
+out/
+
+# 5. LOGS & TEMPORARY FILES
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# 6. OPERATING SYSTEM FILES
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 7. EDITOR & IDE SETTINGS
+.vscode/
+.idea/
+*.code-workspace
+
+# 8. LOCAL DATABASE & BACKUPS
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.backup
+
+# 9. CERTIFICATES & PRIVATE KEYS
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# 10. OPTIONAL LOCAL CONFIGURATION
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
