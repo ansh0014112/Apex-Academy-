@@ -1053,10 +1053,12 @@
       spotlight.style.height = (rect.height + 12) + 'px';
 
       // Position popover
-      const popoverWidth = 360;
+      const popoverWidth = Math.min(360, window.innerWidth - 32);
       let left = rect.left + (rect.width / 2) - (popoverWidth / 2);
       if (left < 16) left = 16;
-      if (left + popoverWidth > window.innerWidth - 16) left = window.innerWidth - popoverWidth - 16;
+      if (left + popoverWidth > window.innerWidth - 16) {
+        left = Math.max(16, window.innerWidth - popoverWidth - 16);
+      }
 
       let top = rect.bottom + 16;
       if (top + 220 > window.innerHeight) {
