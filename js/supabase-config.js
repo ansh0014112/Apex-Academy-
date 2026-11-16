@@ -7,9 +7,9 @@
  */
 
 window.APEX_SUPABASE_CONFIG = {
-  // Replace with your real Supabase Project URL and anon public key:
-  url: window.APEX_SUPABASE_URL || 'https://YOUR_SUPABASE_PROJECT_ID.supabase.co',
-  anonKey: window.APEX_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY',
+  // Live Supabase Project URL and anon/publishable key:
+  url: window.APEX_SUPABASE_URL || 'https://jhdzvzqgddkzpnstvdpf.supabase.co',
+  anonKey: window.APEX_SUPABASE_ANON_KEY || 'sb_publishable_eO75hkRFASOuX6qQz1QVqg__Vf7wYWK',
 
   isConfigured() {
     return Boolean(

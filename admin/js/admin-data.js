@@ -159,7 +159,7 @@ const AdminData = (() => {
       status: 'contacted',
       submittedAt: '2026-11-08T14:15:00',
       notes: [
-        { id: 'n_02', text: 'Called candidate. Discussed past attempt GS scores (87.5 in prelims). Shared demo lecture links on WhatsApp.', addedBy: 'Meera Kapoor', addedAt: '2026-11-08T16:00:00' }
+        { id: 'n_02', text: 'Called candidate. Discussed past attempt GS scores (87.5 in prelims). Shared demo lecture links via email.', addedBy: 'Meera Kapoor', addedAt: '2026-11-08T16:00:00' }
       ],
       followUps: [
         { id: 'fu_002', date: '2026-11-10', purpose: 'Follow-up after demo lecture review & fee structure discussion', status: 'upcoming', counsellorId: 'coun_001' }
@@ -515,7 +515,7 @@ const AdminData = (() => {
       status: 'no_show',
       submittedAt: '2026-11-03T13:00:00',
       notes: [
-        { id: 'bn_07', text: 'Candidate did not connect to Google Meet. Left reminder SMS and WhatsApp message to reschedule.', addedBy: 'Vikram Deshmukh', addedAt: '2026-11-08T20:00:00' }
+        { id: 'bn_07', text: 'Candidate did not connect to Google Meet. Left reminder email and phone message to reschedule.', addedBy: 'Vikram Deshmukh', addedAt: '2026-11-08T20:00:00' }
       ],
       followUps: [
         { id: 'fu_bk_07', date: '2026-11-09', purpose: 'Follow up to reschedule missed counselling session', status: 'today', counsellorId: 'coun_003' }
@@ -710,7 +710,8 @@ const AdminData = (() => {
     bookings: JSON.parse(JSON.stringify(INITIAL_BOOKINGS)),
     courses: JSON.parse(JSON.stringify(INITIAL_COURSES)),
     activity: JSON.parse(JSON.stringify(INITIAL_ACTIVITY)),
-    analytics: JSON.parse(JSON.stringify(INITIAL_ANALYTICS))
+    analytics: JSON.parse(JSON.stringify(INITIAL_ANALYTICS)),
+    communicationLogs: []
   };
 
   // ─── PERSISTENCE HELPERS ───
@@ -754,7 +755,8 @@ const AdminData = (() => {
       bookings: JSON.parse(JSON.stringify(INITIAL_BOOKINGS)),
       courses: JSON.parse(JSON.stringify(INITIAL_COURSES)),
       activity: JSON.parse(JSON.stringify(INITIAL_ACTIVITY)),
-      analytics: JSON.parse(JSON.stringify(INITIAL_ANALYTICS))
+      analytics: JSON.parse(JSON.stringify(INITIAL_ANALYTICS)),
+      communicationLogs: []
     };
     saveStore();
   }
@@ -766,9 +768,14 @@ const AdminData = (() => {
   const STATUS_CONFIG = {
     // Enquiry statuses
     new: { label: 'New', color: 'blue', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+    assigned: { label: 'Assigned', color: 'blue', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
     contacted: { label: 'Contacted', color: 'amber', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', dot: 'bg-amber-500' },
     interested: { label: 'Interested', color: 'purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200', dot: 'bg-purple-500' },
+    'pending follow-up': { label: 'Pending Follow-up', color: 'indigo', bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200', dot: 'bg-indigo-500' },
+    'pending_followup': { label: 'Pending Follow-up', color: 'indigo', bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200', dot: 'bg-indigo-500' },
     converted: { label: 'Converted', color: 'emerald', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200', dot: 'bg-emerald-500' },
+    'not interested': { label: 'Not Interested', color: 'slate', bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', dot: 'bg-slate-400' },
+    'not_interested': { label: 'Not Interested', color: 'slate', bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', dot: 'bg-slate-400' },
     closed: { label: 'Closed', color: 'slate', bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', dot: 'bg-slate-400' },
     // Booking statuses
     pending: { label: 'Pending', color: 'amber', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', dot: 'bg-amber-500' },
@@ -785,7 +792,9 @@ const AdminData = (() => {
   };
 
   function getStatusConfig(status) {
-    return STATUS_CONFIG[status] || {
+    if (!status) return { label: 'Unknown', color: 'slate', bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', dot: 'bg-slate-400' };
+    const key = String(status).toLowerCase().trim();
+    return STATUS_CONFIG[key] || STATUS_CONFIG[status] || {
       label: status, color: 'slate', bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', dot: 'bg-slate-400'
     };
   }
@@ -793,8 +802,12 @@ const AdminData = (() => {
   // ─── QUERY & COMPUTED STATISTICS ───
   function getCounsellorName(id) {
     if (!id) return 'Unassigned';
-    const c = state.counsellors.find(c => c.id === id);
-    return c ? c.name : 'Unknown';
+    const c = (state.counsellors || []).find(co => co.id === id) ||
+              (state.staff || []).find(st => st.id === id) ||
+              (state.users || []).find(u => u.id === id);
+    if (!c) return 'Unknown';
+    if (c.role === 'super_admin') return (c.name || 'Super Admin') + ' (Executive Admin)';
+    return c.name || 'Counsellor';
   }
 
   function getAllFollowUps() {
@@ -833,17 +846,21 @@ const AdminData = (() => {
   }
 
   function getStats(role, userId) {
-    let enquiries = state.enquiries;
-    let bookings = state.bookings;
+    let enquiries = state.enquiries || [];
+    let bookings = state.bookings || [];
 
     if (role === 'admission_counsellor' && userId) {
-      const user = state.users.find(u => u.id === userId);
-      const c = user ? state.counsellors.find(co => co.email === user.email) : null;
-      if (c) enquiries = enquiries.filter(e => e.assignedCounsellor === c.id);
+      const user = state.users.find(u => u.id === userId || u.email === userId);
+      const userEmail = user ? user.email : (typeof window !== 'undefined' && window.SESSION ? window.SESSION.email : null);
+      const c = state.counsellors.find(co => co.id === userId || (userEmail && co.email === userEmail));
+      const cid = c ? c.id : userId;
+      enquiries = enquiries.filter(e => e.assignedCounsellor === cid);
     } else if (role === 'academic_counsellor' && userId) {
-      const user = state.users.find(u => u.id === userId);
-      const c = user ? state.counsellors.find(co => co.email === user.email) : null;
-      if (c) bookings = bookings.filter(b => b.assignedCounsellor === c.id);
+      const user = state.users.find(u => u.id === userId || u.email === userId);
+      const userEmail = user ? user.email : (typeof window !== 'undefined' && window.SESSION ? window.SESSION.email : null);
+      const c = state.counsellors.find(co => co.id === userId || (userEmail && co.email === userEmail));
+      const cid = c ? c.id : userId;
+      bookings = bookings.filter(b => b.assignedCounsellor === cid);
     }
 
     const totalEnquiries = enquiries.length;
@@ -862,13 +879,15 @@ const AdminData = (() => {
     const rescheduledBookings = bookings.filter(b => b.status === 'rescheduled').length;
     const cancelledBookings = bookings.filter(b => b.status === 'cancelled').length;
 
-    const totalCounsellors = state.counsellors.filter(c => c.status === 'active').length;
+    const totalCounsellors = (state.counsellors || []).filter(c => c.status === 'active' && (c.role === 'admission_counsellor' || c.role === 'academic_counsellor')).length;
 
     let allFollowUps = getAllFollowUps();
     if (role === 'admission_counsellor' || role === 'academic_counsellor') {
-      const user = state.users.find(u => u.id === userId);
-      const c = user ? state.counsellors.find(co => co.email === user.email) : null;
-      if (c) allFollowUps = allFollowUps.filter(f => f.counsellorId === c.id);
+      const user = state.users.find(u => u.id === userId || u.email === userId);
+      const userEmail = user ? user.email : (typeof window !== 'undefined' && window.SESSION ? window.SESSION.email : null);
+      const c = state.counsellors.find(co => co.id === userId || (userEmail && co.email === userEmail));
+      const cid = c ? c.id : userId;
+      allFollowUps = allFollowUps.filter(f => f.counsellorId === cid);
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -881,6 +900,7 @@ const AdminData = (() => {
       return fDate < todayDate;
     }).length;
     const completedFollowUps = allFollowUps.filter(f => f.status === 'completed').length;
+    const conversionRate = totalEnquiries > 0 ? Math.round((convertedEnquiries / totalEnquiries) * 100) : 0;
 
     return {
       totalEnquiries, newEnquiries, contactedEnquiries, interestedEnquiries,
@@ -889,58 +909,426 @@ const AdminData = (() => {
       completedBookings, noShowBookings, rescheduledBookings, cancelledBookings,
       totalCounsellors,
       todayFollowUps, upcomingFollowUps, overdueFollowUps, completedFollowUps,
-      allFollowUps
+      allFollowUps,
+      conversionRate
+    };
+  }
+
+  function getUnavailability(counsellorId = null) {
+    if (!Array.isArray(state.unavailability)) state.unavailability = [];
+    return state.unavailability.filter(u => counsellorId ? (u.counsellorId === counsellorId || u.counsellorId === null) : true);
+  }
+
+  function addUnavailability(counsellorId, date, reason) {
+    if (!Array.isArray(state.unavailability)) state.unavailability = [];
+    const item = {
+      id: "unavail_" + Date.now(),
+      counsellorId: counsellorId || null,
+      date: date,
+      reason: reason || "Scheduled Leave",
+      createdAt: new Date().toISOString()
+    };
+    state.unavailability.push(item);
+    saveStore();
+    return item;
+  }
+
+  
+  function getAvailableBookingSlots(dateStr) {
+    if (!dateStr) return { success: false, slots: [], message: "Date required" };
+    
+    // Evaluate strictly in Asia/Kolkata
+    const nowIST = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const todayStr = `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, "0")}-${String(nowIST.getDate()).padStart(2, "0")}`;
+    const nowMinutes = nowIST.getHours() * 60 + nowIST.getMinutes();
+
+    if (dateStr < todayStr) {
+      return { success: false, date: dateStr, message: "Date cannot be in the past.", slots: [] };
+    }
+
+    // Check institute-wide holidays
+    const holidays = Array.isArray(state.unavailability) ? state.unavailability : [];
+    const holiday = holidays.find(u => (!u.counsellorId || u.is_institute_wide) && (u.date === dateStr || u.unavailable_date === dateStr));
+    if (holiday) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        holiday: true,
+        message: "Institute Holiday: " + (holiday.reason || "Scheduled Closure"),
+        slots: []
+      };
+    }
+
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    const dow = dateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+
+    if (dow === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        message: "Counselling sessions are unavailable on Sundays. Please select a Monday to Saturday date.",
+        slots: []
+      };
+    }
+
+    // Active academic counsellors
+    const academicCounsellors = (state.counsellors || []).filter(c => 
+      (c.role === "academic_counsellor" || c.department === "Academic Counselling Department") && 
+      (c.status === "active" || c.is_active === true)
+    );
+
+    const availableSlotsMap = new Map();
+
+    function timeToMinutes(tStr) {
+      if (!tStr) return 0;
+      const [h, m] = tStr.split(":").map(Number);
+      return h * 60 + m;
+    }
+
+    function formatTimeWindow(startMin, duration = 30) {
+      function fmt(min) {
+        let h = Math.floor(min / 60);
+        const m = min % 60;
+        const ampm = h >= 12 ? "PM" : "AM";
+        if (h > 12) h -= 12;
+        if (h === 0) h = 12;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} ${ampm}`;
+      }
+      return `${fmt(startMin)} - ${fmt(startMin + duration)}`;
+    }
+
+    let activeCounsellorsCount = 0;
+
+    academicCounsellors.forEach(c => {
+      // Check if counsellor is on leave on this date
+      const onLeave = holidays.some(u => (u.counsellorId === c.id || u.counsellor_id === c.id) && (u.date === dateStr || u.unavailable_date === dateStr));
+      if (onLeave) return;
+
+      const schedule = getCounsellorAvailability(c.id);
+      const dayCfg = (schedule || []).find(s => s.day_of_week === dow);
+      if (!dayCfg || !dayCfg.is_available) return;
+
+      activeCounsellorsCount++;
+
+      // Allowed booking window: 09:00 AM (540 min) to 08:00 PM (1200 min)
+      // Final slot must end no later than 08:00 PM (latest slot start = 1170 min / 19:30)
+      const counsellorStart = Math.max(540, timeToMinutes(dayCfg.start_time));
+      const counsellorEnd = Math.min(1200, timeToMinutes(dayCfg.end_time));
+      const hasBreak = Boolean(dayCfg.has_break && dayCfg.break_start && dayCfg.break_end);
+      const breakStart = hasBreak ? timeToMinutes(dayCfg.break_start) : null;
+      const breakEnd = hasBreak ? timeToMinutes(dayCfg.break_end) : null;
+
+      // Existing bookings for this counsellor on dateStr
+      const bookedSlots = (state.bookings || [])
+        .filter(b => (b.assignedCounsellor === c.id || b.assigned_counsellor_id === c.id) && 
+                     (b.preferredDate === dateStr || b.preferred_date === dateStr) && 
+                     b.status !== "cancelled" && b.status !== "rejected")
+        .map(b => (b.preferredTime || b.preferred_time || "").trim().replace(/–/g, "-"));
+
+      // Generate 30-min slots
+      for (let s = counsellorStart; s + 30 <= counsellorEnd; s += 30) {
+        // Enforce maximum slot end time 20:00 (1200 min)
+        if (s + 30 > 1200) break;
+
+        // Skip break period
+        if (hasBreak && s < breakEnd && s + 30 > breakStart) continue;
+
+        // If today, skip slots in past or starting within 30 min
+        if (dateStr === todayStr && s <= nowMinutes + 30) continue;
+
+        const slotLabel = formatTimeWindow(s, 30);
+
+        // Check if this slot is already booked for this counsellor
+        if (bookedSlots.includes(slotLabel)) continue;
+
+        availableSlotsMap.set(s, slotLabel);
+      }
+    });
+
+    if (activeCounsellorsCount === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        message: "No academic counsellors are available on this date. Please select another date.",
+        slots: []
+      };
+    }
+
+    const sortedSlots = Array.from(availableSlotsMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(entry => entry[1]);
+
+    if (sortedSlots.length === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: true,
+        fully_booked: true,
+        message: "All strategy consultation sessions are fully booked for this date.",
+        slots: []
+      };
+    }
+
+    return {
+      success: true,
+      date: dateStr,
+      day_available: true,
+      fully_booked: false,
+      slots: sortedSlots
+    };
+  }
+
+  function deleteUnavailability(id) {
+    if (!Array.isArray(state.unavailability)) return false;
+    state.unavailability = state.unavailability.filter(u => u.id !== id);
+    saveStore();
+    return true;
+  }
+
+  // ─── DYNAMIC REPORTS & ANALYTICS ENGINE ───
+  function calculateAnalytics(role = 'super_admin', userId = null) {
+    let enquiries = state.enquiries || [];
+    let bookings = state.bookings || [];
+
+    // Filter dataset by counsellor role when viewed by a counsellor
+    if ((role === 'admission_counsellor' || role === 'academic_counsellor') && userId) {
+      const user = state.users.find(u => u.id === userId || u.email === userId);
+      const userEmail = user ? user.email : (typeof window !== 'undefined' && window.SESSION ? window.SESSION.email : null);
+      const c = (state.counsellors || []).find(co => co.id === userId || (userEmail && co.email === userEmail));
+      const cid = c ? c.id : userId;
+      enquiries = enquiries.filter(e => e.assignedCounsellor === cid || e.assigned_counsellor_id === cid);
+      bookings = bookings.filter(b => b.assignedCounsellor === cid || b.assigned_counsellor_id === cid);
+    }
+
+    // 1. Generate 6-Month Rolling Window in Asia/Kolkata timezone ending at current month
+    const now = new Date();
+    const kolkataDateStr = now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: 'numeric' });
+    const [mStr, , yStr] = kolkataDateStr.split('/');
+    const curYear = parseInt(yStr, 10);
+    const curMonthIndex = parseInt(mStr, 10) - 1; // 0-based: 0 = Jan, 10 = Nov
+
+    const monthsWindow = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(Date.UTC(curYear, curMonthIndex - i, 1));
+      const monthShort = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+      const year = d.getUTCFullYear();
+      const monthNum = d.getUTCMonth();
+      const key = `${year}-${String(monthNum + 1).padStart(2, '0')}`;
+      monthsWindow.push({ key, month: monthShort, count: 0 });
+    }
+
+    const monthlyEnquiries = monthsWindow.map(m => ({ ...m, count: 0 }));
+    const monthlyBookings = monthsWindow.map(m => ({ ...m, count: 0 }));
+
+    function toKolkataMonthKey(dateVal) {
+      if (!dateVal) return null;
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return null;
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit'
+      });
+      const parts = formatter.formatToParts(d);
+      const y = parts.find(p => p.type === 'year')?.value;
+      const m = parts.find(p => p.type === 'month')?.value;
+      return `${y}-${m}`;
+    }
+
+    // Inflow: admission enquiries grouped by month
+    enquiries.forEach(e => {
+      const k = toKolkataMonthKey(e.submittedAt || e.created_at);
+      if (k) {
+        const item = monthlyEnquiries.find(m => m.key === k);
+        if (item) item.count++;
+      }
+    });
+
+    // Counselling booking requests grouped by month
+    bookings.forEach(b => {
+      const k = toKolkataMonthKey(b.submittedAt || b.created_at || b.preferredDate || b.preferred_date);
+      if (k) {
+        const item = monthlyBookings.find(m => m.key === k);
+        if (item) item.count++;
+      }
+    });
+
+    // 2. Admission Enquiry Conversion Funnel
+    const totalEnquiries = enquiries.length;
+    const contacted = enquiries.filter(e => {
+      const s = (e.status || '').toLowerCase().trim();
+      return ['contacted', 'interested', 'pending follow-up', 'pending_followup', 'converted', 'not interested', 'not_interested', 'closed'].includes(s);
+    }).length;
+    const interested = enquiries.filter(e => {
+      const s = (e.status || '').toLowerCase().trim();
+      return ['interested', 'pending follow-up', 'pending_followup', 'converted'].includes(s);
+    }).length;
+    const converted = enquiries.filter(e => {
+      const s = (e.status || '').toLowerCase().trim();
+      return s === 'converted';
+    }).length;
+    const conversionRate = totalEnquiries > 0 ? Number(((converted / totalEnquiries) * 100).toFixed(1)) : 0.0;
+
+    // 3. Course Stream Share
+    const streamCounts = {
+      'Civil Services & SSC': 0,
+      'Banking & Railway': 0,
+      'Foundation Program': 0
+    };
+    enquiries.forEach(e => {
+      const text = `${e.courseCategory || ''} ${e.courseCategoryId || ''} ${e.targetExamination || ''}`.toLowerCase();
+      if (text.includes('bank') || text.includes('railway') || text.includes('rrb') || text.includes('ibps') || text.includes('sbi')) {
+        streamCounts['Banking & Railway']++;
+      } else if (text.includes('foundation') || text.includes('integrated') || text.includes('fundamental')) {
+        streamCounts['Foundation Program']++;
+      } else {
+        streamCounts['Civil Services & SSC']++;
+      }
+    });
+
+    const courseWiseEnquiries = [
+      {
+        course: 'Civil Services & SSC',
+        count: streamCounts['Civil Services & SSC'],
+        percentage: totalEnquiries > 0 ? Math.round((streamCounts['Civil Services & SSC'] / totalEnquiries) * 100) : 0
+      },
+      {
+        course: 'Banking & Railway',
+        count: streamCounts['Banking & Railway'],
+        percentage: totalEnquiries > 0 ? Math.round((streamCounts['Banking & Railway'] / totalEnquiries) * 100) : 0
+      },
+      {
+        course: 'Foundation Program',
+        count: streamCounts['Foundation Program'],
+        percentage: totalEnquiries > 0 ? Math.round((streamCounts['Foundation Program'] / totalEnquiries) * 100) : 0
+      }
+    ];
+
+    // 4. Department Conversion Champions (Strictly excluding Super Admin)
+    const allEnquiries = state.enquiries || [];
+    const allBookings = state.bookings || [];
+    const activeStaff = (state.counsellors || []).filter(c => {
+      const isSuper = c.role === 'super_admin' || (c.department || '').toLowerCase().includes('executive administration');
+      const isActive = c.status === 'active' || c.is_active === true;
+      return !isSuper && isActive;
+    });
+
+    const champions = activeStaff.map(c => {
+      const assignedEnq = allEnquiries.filter(e => e.assignedCounsellor === c.id || e.assigned_counsellor_id === c.id);
+      const convertedEnq = assignedEnq.filter(e => (e.status || '').toLowerCase() === 'converted');
+      const assignedBk = allBookings.filter(b => b.assignedCounsellor === c.id || b.assigned_counsellor_id === c.id);
+      const completedBk = assignedBk.filter(b => (b.status || '').toLowerCase() === 'completed');
+
+      let scoreLabel = '0% Conv.';
+      let sortScore = 0;
+
+      if (c.role === 'academic_counsellor') {
+        const count = completedBk.length || c.completedTasks || 0;
+        scoreLabel = `${count} Sessions`;
+        sortScore = count * 100 + assignedBk.length;
+      } else {
+        if (assignedEnq.length > 0) {
+          const rate = Math.round((convertedEnq.length / assignedEnq.length) * 100);
+          scoreLabel = `${rate}% Conv.`;
+          sortScore = rate * 100 + convertedEnq.length;
+        } else if (c.conversionRate) {
+          scoreLabel = `${c.conversionRate}% Conv.`;
+          sortScore = c.conversionRate * 100;
+        } else if (completedBk.length > 0) {
+          scoreLabel = `${completedBk.length} Sessions`;
+          sortScore = completedBk.length * 100;
+        } else {
+          scoreLabel = '0% Conv.';
+          sortScore = 0;
+        }
+      }
+
+      return {
+        id: c.id,
+        name: c.name,
+        department: c.department || (c.role === 'admission_counsellor' ? 'Admission Department' : 'Academic Counselling Department'),
+        role: c.role,
+        scoreLabel,
+        sortScore
+      };
+    }).sort((a, b) => b.sortScore - a.sortScore || a.name.localeCompare(b.name));
+
+    return {
+      monthlyEnquiries,
+      monthlyBookings,
+      conversionFunnel: {
+        totalEnquiries,
+        contacted,
+        interested,
+        converted,
+        conversionRate
+      },
+      courseWiseEnquiries,
+      champions
     };
   }
 
   // ─── ROLE-BASED ACCESS GATEWAY ───
   function getDataForRole(role, userId) {
-    const user = state.users.find(u => u.id === userId);
-    if (!user) return null;
-
-    let counsellorId = null;
-    if (role === 'admission_counsellor' || role === 'academic_counsellor') {
-      const c = state.counsellors.find(c => c.email === user.email);
-      counsellorId = c ? c.id : null;
-    }
-
     if (role === 'super_admin') {
       return {
-        enquiries: state.enquiries,
-        bookings: state.bookings,
-        counsellors: state.counsellors,
+        enquiries: state.enquiries || [],
+        bookings: state.bookings || [],
+        counsellors: state.counsellors || [],
         followUps: getAllFollowUps(),
-        courses: state.courses,
-        analytics: state.analytics,
-        activity: state.activity,
+        courses: state.courses || [],
+        analytics: calculateAnalytics('super_admin', null),
+        activity: state.activity || [],
         counsellorId: null
       };
     }
 
+    let counsellorId = userId;
+    const user = state.users.find(u => u.id === userId || u.email === userId);
+    const userEmail = user ? user.email : (typeof window !== 'undefined' && window.SESSION ? window.SESSION.email : null);
+    const c = (state.counsellors || []).find(co => co.id === userId || (userEmail && co.email === userEmail));
+    if (c) {
+      counsellorId = c.id;
+    }
+
     if (role === 'admission_counsellor') {
       const myEnquiries = counsellorId
-        ? state.enquiries.filter(e => e.assignedCounsellor === counsellorId)
-        : [];
+        ? (state.enquiries || []).filter(e => e.assignedCounsellor === counsellorId || e.assigned_counsellor_id === counsellorId)
+        : (state.enquiries || []);
+      const myBookings = counsellorId
+        ? (state.bookings || []).filter(b => b.assignedCounsellor === counsellorId || b.assigned_counsellor_id === counsellorId)
+        : (state.bookings || []);
       const myFollowUps = counsellorId
         ? getAllFollowUps().filter(f => f.counsellorId === counsellorId)
-        : [];
+        : getAllFollowUps();
       return {
         enquiries: myEnquiries,
+        bookings: myBookings,
         followUps: myFollowUps,
+        analytics: calculateAnalytics(role, userId),
         counsellorId
       };
     }
 
     if (role === 'academic_counsellor') {
+      const myEnquiries = counsellorId
+        ? (state.enquiries || []).filter(e => e.assignedCounsellor === counsellorId || e.assigned_counsellor_id === counsellorId)
+        : (state.enquiries || []);
       const myBookings = counsellorId
-        ? state.bookings.filter(b => b.assignedCounsellor === counsellorId)
-        : [];
+        ? (state.bookings || []).filter(b => b.assignedCounsellor === counsellorId || b.assigned_counsellor_id === counsellorId)
+        : (state.bookings || []);
       const myFollowUps = counsellorId
         ? getAllFollowUps().filter(f => f.counsellorId === counsellorId)
-        : [];
+        : getAllFollowUps();
       return {
+        enquiries: myEnquiries,
         bookings: myBookings,
         followUps: myFollowUps,
+        analytics: calculateAnalytics(role, userId),
         counsellorId
       };
     }
@@ -1075,7 +1463,7 @@ const AdminData = (() => {
     if (!bk) return false;
     if (!Array.isArray(bk.followUps)) bk.followUps = [];
     bk.followUps.push({
-      id: 'fu_bk_' + Date.now(),
+      id: followUpData.id || ('fu_bk_' + Date.now()),
       date: followUpData.date,
       purpose: followUpData.purpose,
       status: 'upcoming',
@@ -1168,8 +1556,9 @@ const AdminData = (() => {
   }
 
   function getCounsellorWorkload(counsellorId) {
-    const c = state.counsellors.find(co => co.id === counsellorId);
-    if (!c) return null;
+    const c = (state.counsellors || []).find(co => co.id === counsellorId) ||
+              (state.staff || []).find(co => co.id === counsellorId);
+    if (!c || c.role === 'super_admin') return null;
 
     const assignedEnqs = state.enquiries.filter(e => e.assignedCounsellor === counsellorId);
     const assignedBks = state.bookings.filter(b => b.assignedCounsellor === counsellorId);
@@ -1408,32 +1797,315 @@ const AdminData = (() => {
     return [headers.join(','), ...rows.map(r => `"${r[0]}","${r[1]}"`)].join('\n');
   }
 
+  function setLiveRecords(records) {
+    if (!records || typeof records !== 'object') return;
+    if (Array.isArray(records.enquiries)) state.enquiries = records.enquiries;
+    if (Array.isArray(records.bookings)) state.bookings = records.bookings;
+    if (Array.isArray(records.staff)) state.staff = records.staff;
+    if (Array.isArray(records.counsellors)) {
+      // Exclude super_admin from ordinary counsellor list
+      state.counsellors = records.counsellors.filter(c => c.role === 'admission_counsellor' || c.role === 'academic_counsellor');
+    }
+    if (Array.isArray(records.activity) && records.activity.length > 0) state.activity = records.activity;
+    if (Array.isArray(records.courses) && records.courses.length > 0) state.courses = records.courses;
+    if (Array.isArray(records.communicationLogs)) state.communicationLogs = records.communicationLogs;
+    state.analytics = calculateAnalytics('super_admin', null);
+    saveStore();
+  }
+
+  function getCommunicationLogs(filter = {}) {
+    let logs = state.communicationLogs || [];
+    if (filter.channel) logs = logs.filter(l => l.channel === filter.channel);
+    if (filter.status) logs = logs.filter(l => l.status === filter.status);
+    if (filter.studentId) logs = logs.filter(l => l.student_id === filter.studentId);
+    if (filter.counsellorId) logs = logs.filter(l => l.counsellor_id === filter.counsellorId);
+    return logs;
+  }
+
+  function getStudentCommunicationLogs(studentId, phone, email) {
+    const logs = state.communicationLogs || [];
+    const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
+    const cleanEmail = email ? String(email).trim().toLowerCase() : null;
+
+    return logs.filter(l => {
+      if (studentId && l.student_id === studentId) return true;
+      if (cleanEmail && l.recipient && l.recipient.toLowerCase() === cleanEmail) return true;
+      if (cleanPhone && l.recipient && l.recipient.includes(cleanPhone)) return true;
+      return false;
+    });
+  }
+
+  function getCommunicationStats() {
+    const logs = state.communicationLogs || [];
+    const emails = logs.filter(l => l.channel === 'email');
+    return {
+      totalEmails: emails.length,
+            sent: logs.filter(l => l.status === 'sent').length,
+      delivered: logs.filter(l => l.status === 'delivered').length,
+      read: logs.filter(l => l.status === 'read').length,
+      failed: logs.filter(l => l.status === 'failed').length,
+      pending: logs.filter(l => l.status === 'pending').length,
+    };
+  }
+
+
+  // ─── COUNSELLOR AVAILABILITY & HOLIDAY MANAGEMENT ───
+  function getDefaultWeeklySchedule() {
+    return [
+      { day_of_week: 1, is_available: true, start_time: "09:30", end_time: "17:30", slot_duration_minutes: 30, has_break: true, break_start: "13:00", break_end: "14:00" },
+      { day_of_week: 2, is_available: true, start_time: "10:00", end_time: "19:00", slot_duration_minutes: 30, has_break: true, break_start: "13:30", break_end: "15:00" },
+      { day_of_week: 3, is_available: true, start_time: "11:00", end_time: "19:30", slot_duration_minutes: 30, has_break: true, break_start: "14:00", break_end: "15:30" },
+      { day_of_week: 4, is_available: true, start_time: "09:00", end_time: "18:00", slot_duration_minutes: 30, has_break: true, break_start: "12:30", break_end: "14:00" },
+      { day_of_week: 5, is_available: true, start_time: "10:00", end_time: "20:00", slot_duration_minutes: 30, has_break: true, break_start: "14:00", break_end: "15:30" },
+      { day_of_week: 6, is_available: true, start_time: "09:00", end_time: "13:30", slot_duration_minutes: 30, has_break: false, break_start: "", break_end: "" },
+      { day_of_week: 0, is_available: false, start_time: "09:00", end_time: "18:00", slot_duration_minutes: 30, has_break: false, break_start: "", break_end: "" }
+    ];
+  }
+
+  function getCounsellorAvailability(counsellorId) {
+    if (!state.availability) state.availability = {};
+    if (!state.availability[counsellorId]) {
+      state.availability[counsellorId] = getDefaultWeeklySchedule();
+    }
+    return JSON.parse(JSON.stringify(state.availability[counsellorId]));
+  }
+
+  function saveCounsellorAvailability(counsellorId, schedule) {
+    if (!state.availability) state.availability = {};
+    state.availability[counsellorId] = schedule;
+    saveStore();
+    return true;
+  }
+
+  function getUnavailability(counsellorId = null) {
+    if (!Array.isArray(state.unavailability)) state.unavailability = [];
+    return state.unavailability.filter(u => counsellorId ? (u.counsellorId === counsellorId || u.counsellorId === null) : true);
+  }
+
+  function addUnavailability(counsellorId, date, reason) {
+    if (!Array.isArray(state.unavailability)) state.unavailability = [];
+    const item = {
+      id: "unavail_" + Date.now(),
+      counsellorId: counsellorId || null,
+      date: date,
+      reason: reason || "Scheduled Leave",
+      createdAt: new Date().toISOString()
+    };
+    state.unavailability.push(item);
+    saveStore();
+    return item;
+  }
+
+  function deleteUnavailability(id) {
+    if (!Array.isArray(state.unavailability)) return false;
+    state.unavailability = state.unavailability.filter(u => u.id !== id);
+    saveStore();
+    return true;
+  }
+
+  function getAvailableBookingSlots(dateStr) {
+    if (!dateStr) return { success: false, slots: [], message: "Date required" };
+    
+    // Evaluate in Asia/Kolkata
+    const nowIST = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const todayStr = `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, "0")}-${String(nowIST.getDate()).padStart(2, "0")}`;
+    const nowMinutes = nowIST.getHours() * 60 + nowIST.getMinutes();
+
+    if (dateStr < todayStr) {
+      return { success: false, date: dateStr, message: "Date cannot be in the past.", slots: [] };
+    }
+
+    // Check institute-wide holidays
+    const holidays = Array.isArray(state.unavailability) ? state.unavailability : [];
+    const holiday = holidays.find(u => (!u.counsellorId || u.is_institute_wide) && (u.date === dateStr || u.unavailable_date === dateStr));
+    if (holiday) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        holiday: true,
+        message: "Institute Holiday: " + (holiday.reason || "Scheduled Closure"),
+        slots: []
+      };
+    }
+
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dateObj = new Date(y, m - 1, d);
+    const dow = dateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+
+    if (dow === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        message: "Counselling sessions are unavailable on Sundays. Please select a Monday to Saturday date.",
+        slots: []
+      };
+    }
+
+    // Active academic counsellors
+    const academicCounsellors = (state.counsellors || []).filter(c => 
+      (c.role === "academic_counsellor" || c.department === "Academic Counselling Department") && 
+      (c.status === "active" || c.is_active === true)
+    );
+
+    const availableSlotsMap = new Map();
+
+    function timeToMinutes(tStr) {
+      if (!tStr) return 0;
+      const [h, m] = tStr.split(":").map(Number);
+      return h * 60 + m;
+    }
+
+    function formatTimeWindow(startMin, duration = 30) {
+      function fmt(min) {
+        let h = Math.floor(min / 60);
+        const m = min % 60;
+        const ampm = h >= 12 ? "PM" : "AM";
+        if (h > 12) h -= 12;
+        if (h === 0) h = 12;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} ${ampm}`;
+      }
+      return `${fmt(startMin)} - ${fmt(startMin + duration)}`;
+    }
+
+    let activeCounsellorsCount = 0;
+
+    academicCounsellors.forEach(c => {
+      // Check if counsellor on leave on this date
+      const onLeave = holidays.some(u => (u.counsellorId === c.id || u.counsellor_id === c.id) && (u.date === dateStr || u.unavailable_date === dateStr));
+      if (onLeave) return;
+
+      const schedule = getCounsellorAvailability(c.id);
+      const dayCfg = (schedule || []).find(s => s.day_of_week === dow);
+      if (!dayCfg || !dayCfg.is_available) return;
+
+      activeCounsellorsCount++;
+
+      // Allowed booking window: 09:00 AM (540 min) to 08:00 PM (1200 min)
+      // Final slot must end no later than 08:00 PM (latest slot start = 1170 min / 19:30)
+      const counsellorStart = Math.max(540, timeToMinutes(dayCfg.start_time));
+      const counsellorEnd = Math.min(1200, timeToMinutes(dayCfg.end_time));
+      const hasBreak = Boolean(dayCfg.has_break && dayCfg.break_start && dayCfg.break_end);
+      const breakStart = hasBreak ? timeToMinutes(dayCfg.break_start) : null;
+      const breakEnd = hasBreak ? timeToMinutes(dayCfg.break_end) : null;
+
+      // Existing bookings for this counsellor on dateStr
+      const bookedSlots = (state.bookings || [])
+        .filter(b => (b.assignedCounsellor === c.id || b.assigned_counsellor_id === c.id) && 
+                     (b.preferredDate === dateStr || b.preferred_date === dateStr) && 
+                     b.status !== "cancelled" && b.status !== "rejected")
+        .map(b => (b.preferredTime || b.preferred_time || "").trim().replace(/–/g, "-"));
+
+      // Generate 30-min slots
+      for (let s = counsellorStart; s + 30 <= counsellorEnd; s += 30) {
+        // Enforce maximum slot end time 20:00 (1200 min)
+        if (s + 30 > 1200) break;
+
+        // Skip break period
+        if (hasBreak && s < breakEnd && s + 30 > breakStart) continue;
+
+        // If today, skip slots in past or starting within 30 min
+        if (dateStr === todayStr && s <= nowMinutes + 30) continue;
+
+        const slotLabel = formatTimeWindow(s, 30);
+
+        // Check if this slot is already booked for this counsellor
+        if (bookedSlots.includes(slotLabel)) continue;
+
+        availableSlotsMap.set(s, slotLabel);
+      }
+    });
+
+    if (activeCounsellorsCount === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: false,
+        message: "No academic counsellors are available on this date. Please select another date.",
+        slots: []
+      };
+    }
+
+    const sortedSlots = Array.from(availableSlotsMap.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(entry => entry[1]);
+
+    if (sortedSlots.length === 0) {
+      return {
+        success: true,
+        date: dateStr,
+        day_available: true,
+        fully_booked: true,
+        message: "All strategy consultation sessions are fully booked for this date.",
+        slots: []
+      };
+    }
+
+    return {
+      success: true,
+      date: dateStr,
+      day_available: true,
+      fully_booked: false,
+      slots: sortedSlots
+    };
+  }
+
   return {
     get users() { return state.users; },
+    set users(v) { state.users = Array.isArray(v) ? v : []; },
     get DEMO_USERS() { return state.users; },
+    get staff() { return state.staff || [...(state.users || []), ...(state.counsellors || [])]; },
+    set staff(v) { state.staff = Array.isArray(v) ? v : []; },
     get counsellors() { return state.counsellors; },
+    set counsellors(v) { state.counsellors = Array.isArray(v) ? v : []; },
     get COUNSELLORS() { return state.counsellors; },
     get enquiries() { return state.enquiries; },
+    set enquiries(v) { state.enquiries = Array.isArray(v) ? v : []; },
     get ENQUIRIES() { return state.enquiries; },
     get bookings() { return state.bookings; },
+    set bookings(v) { state.bookings = Array.isArray(v) ? v : []; },
     get BOOKINGS() { return state.bookings; },
     get courses() { return state.courses; },
+    set courses(v) { state.courses = Array.isArray(v) ? v : []; },
     get COURSES_BATCHES() { return state.courses; },
     get activity() { return state.activity; },
+    set activity(v) { state.activity = Array.isArray(v) ? v : []; },
     get RECENT_ACTIVITY() { return state.activity; },
-    get analytics() { return state.analytics; },
-    get ANALYTICS() { return state.analytics; },
+    get analytics() {
+      const role = (typeof window !== 'undefined' && window.SESSION) ? window.SESSION.role : 'super_admin';
+      const userId = (typeof window !== 'undefined' && window.SESSION) ? window.SESSION.userId : null;
+      return calculateAnalytics(role, userId);
+    },
+    set analytics(v) { state.analytics = v || {}; },
+    get ANALYTICS() { return this.analytics; },
+    get communicationLogs() { return state.communicationLogs || []; },
+    set communicationLogs(v) { state.communicationLogs = Array.isArray(v) ? v : []; },
+    setLiveRecords,
+    saveAll: saveStore,
     // Queries
+    calculateAnalytics,
     getStats,
     getAllFollowUps,
     getDataForRole,
     getCounsellorName,
     getStatusConfig,
     getCounsellorWorkload,
+    getCommunicationLogs,
+    getStudentCommunicationLogs,
+    getCommunicationStats,
+    setCommunicationLogs: (logs) => { state.communicationLogs = Array.isArray(logs) ? logs : []; saveStore(); },
     // Extended Queries & Capabilities
     authenticate,
     isTourCompleted,
     setTourCompleted,
+    // Availability & Scheduling
+    getCounsellorAvailability,
+    saveCounsellorAvailability,
+    getUnavailability,
+    addUnavailability,
+    deleteUnavailability,
+    getAvailableBookingSlots,
     checkDoubleBooking,
     getStudentProfile,
     exportAdmissionsCSV,
@@ -1458,3 +2130,6 @@ const AdminData = (() => {
     saveStore
   };
 })();
+
+if (typeof window !== 'undefined') window.AdminData = AdminData;
+if (typeof module !== 'undefined' && module.exports) module.exports = AdminData;

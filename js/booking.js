@@ -1,14 +1,16 @@
+
 /**
  * APEX ACADEMY — Counselling Call Booking Script
- * Interactive date picker, slot selector, dynamic category & exam dropdown,
- * query parameter parsing, full form validation, and appointment request pass generator.
+ * Interactive dynamic date picker, real-time Supabase availability loader,
+ * automatic Asia/Kolkata timezone evaluation, 30-minute booking windows (09:00 AM - 08:00 PM),
+ * dynamic category & exam dropdown, query parameter parsing, and form submission.
  */
 
-document.addEventListener('DOMContentLoaded', () => {
-  initBookingSystem();
-});
+let bookingSystemInitialized = false;
 
 function initBookingSystem() {
+  if (bookingSystemInitialized) return;
+  bookingSystemInitialized = true;
   generateDateCards();
   initSlotSelection();
   initCourseAndExamSelectors();
@@ -16,97 +18,121 @@ function initBookingSystem() {
   parseBookingQueryParams();
 }
 
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initBookingSystem);
+} else {
+  initBookingSystem();
+}
+
 /**
- * Generate Next 7 Days for quick selection
+ * Helper: Retrieve current date & time evaluated strictly in Asia/Kolkata timezone
+ */
+function getNowInIST() {
+  const now = new Date();
+  const istStr = now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+  return new Date(istStr);
+}
+
+/**
+ * Generate Next 7 Days for quick selection (evaluated in Asia/Kolkata timezone)
  */
 function generateDateCards() {
-  const container = document.getElementById('date-picker-container');
+  const container = document.getElementById("date-picker-container");
   if (!container) return;
 
-  container.innerHTML = '';
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const today = new Date();
+  container.innerHTML = "";
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const nowIST = getNowInIST();
 
-  // Next 7 days
-  for (let i = 1; i <= 7; i++) {
-    const nextDate = new Date();
-    nextDate.setDate(today.getDate() + i);
+  // If past 18:30 IST today, start from tomorrow (offset 1); otherwise start from today
+  const startOffset = nowIST.getHours() >= 18 ? 1 : 0;
+  const totalDays = 7;
+
+  let firstValidDateISO = null;
+  let firstValidFullDateStr = null;
+
+  for (let i = startOffset; i < startOffset + totalDays; i++) {
+    const nextDate = new Date(nowIST);
+    nextDate.setDate(nowIST.getDate() + i);
 
     const dayName = days[nextDate.getDay()];
     const dateNum = nextDate.getDate();
     const monthName = months[nextDate.getMonth()];
     const fullDateStr = `${dayName}, ${dateNum} ${monthName} ${nextDate.getFullYear()}`;
+    const isoDateStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}-${String(nextDate.getDate()).padStart(2, "0")}`;
+    const isFirst = (i === startOffset);
 
-    const dateCard = document.createElement('button');
-    dateCard.type = 'button';
+    if (isFirst) {
+      firstValidDateISO = isoDateStr;
+      firstValidFullDateStr = fullDateStr;
+    }
+
+    const dateCard = document.createElement("button");
+    dateCard.type = "button";
     dateCard.className = `date-card p-3 rounded-xl border text-center transition-all flex flex-col items-center justify-center min-w-[70px] ${
-      i === 1 
-        ? 'bg-slate-900 text-white border-slate-900 shadow-sm' 
-        : 'bg-white text-slate-800 border-slate-200 hover:border-slate-400'
+      isFirst 
+        ? "bg-slate-900 text-white border-slate-900 shadow-sm" 
+        : "bg-white text-slate-800 border-slate-200 hover:border-slate-400"
     }`;
-    // Store both display format and ISO format (YYYY-MM-DD for Supabase RPC)
-    const isoDateStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
-    dateCard.setAttribute('data-date', fullDateStr);
-    dateCard.setAttribute('data-date-iso', isoDateStr);
+    dateCard.setAttribute("data-date", fullDateStr);
+    dateCard.setAttribute("data-date-iso", isoDateStr);
 
     dateCard.innerHTML = `
-      <span class="text-xs uppercase font-medium tracking-wider ${i === 1 ? 'text-amber-400' : 'text-slate-400'}">${dayName}</span>
+      <span class="text-xs uppercase font-medium tracking-wider ${isFirst ? "text-amber-400" : "text-slate-400"}">${dayName}</span>
       <span class="text-lg font-bold my-0.5">${dateNum}</span>
-      <span class="text-[11px] ${i === 1 ? 'text-slate-300' : 'text-slate-500'}">${monthName}</span>
+      <span class="text-[11px] ${isFirst ? "text-slate-300" : "text-slate-500"}">${monthName}</span>
     `;
 
-    dateCard.addEventListener('click', () => {
-      document.querySelectorAll('.date-card').forEach(c => {
-        c.classList.remove('bg-slate-900', 'text-white', 'border-slate-900', 'shadow-sm');
-        c.classList.add('bg-white', 'text-slate-800', 'border-slate-200');
-        const daySpan = c.querySelector('span:first-child');
-        const monthSpan = c.querySelector('span:last-child');
+    dateCard.addEventListener("click", () => {
+      document.querySelectorAll(".date-card").forEach(c => {
+        c.classList.remove("bg-slate-900", "text-white", "border-slate-900", "shadow-sm");
+        c.classList.add("bg-white", "text-slate-800", "border-slate-200");
+        const daySpan = c.querySelector("span:first-child");
+        const monthSpan = c.querySelector("span:last-child");
         if (daySpan) {
-          daySpan.classList.remove('text-amber-400');
-          daySpan.classList.add('text-slate-400');
+          daySpan.classList.remove("text-amber-400");
+          daySpan.classList.add("text-slate-400");
         }
         if (monthSpan) {
-          monthSpan.classList.remove('text-slate-300');
-          monthSpan.classList.add('text-slate-500');
+          monthSpan.classList.remove("text-slate-300");
+          monthSpan.classList.add("text-slate-500");
         }
       });
 
-      dateCard.classList.remove('bg-white', 'text-slate-800', 'border-slate-200');
-      dateCard.classList.add('bg-slate-900', 'text-white', 'border-slate-900', 'shadow-sm');
-      const daySpan = dateCard.querySelector('span:first-child');
-      const monthSpan = dateCard.querySelector('span:last-child');
+      dateCard.classList.remove("bg-white", "text-slate-800", "border-slate-200");
+      dateCard.classList.add("bg-slate-900", "text-white", "border-slate-900", "shadow-sm");
+      const daySpan = dateCard.querySelector("span:first-child");
+      const monthSpan = dateCard.querySelector("span:last-child");
       if (daySpan) {
-        daySpan.classList.remove('text-slate-400');
-        daySpan.classList.add('text-amber-400');
+        daySpan.classList.remove("text-slate-400");
+        daySpan.classList.add("text-amber-400");
       }
       if (monthSpan) {
-        monthSpan.classList.remove('text-slate-500');
-        monthSpan.classList.add('text-slate-300');
+        monthSpan.classList.remove("text-slate-500");
+        monthSpan.classList.add("text-slate-300");
       }
 
-      const dateInput = document.getElementById('selected-date-input');
+      const dateInput = document.getElementById("selected-date-input");
       if (dateInput) {
         dateInput.value = fullDateStr;
-        dateInput.setAttribute('data-iso', isoDateStr);
+        dateInput.setAttribute("data-iso", isoDateStr);
       }
-      clearBookingError('selected-date-input');
-      // Load dynamic slots for the selected date if Supabase is live
+      clearBookingError("selected-date-input");
       loadDynamicSlotsForDate(isoDateStr);
     });
 
-    // Set first day as default
-    if (i === 1) {
-      const dateInput = document.getElementById('selected-date-input');
-      if (dateInput) {
-        dateInput.value = fullDateStr;
-        dateInput.setAttribute('data-iso', isoDateStr);
-      }
-      // Load dynamic slots for the first (default) date
-      loadDynamicSlotsForDate(isoDateStr);
-    }
-
     container.appendChild(dateCard);
+  }
+
+  // Set initial default date selection
+  if (firstValidDateISO) {
+    const dateInput = document.getElementById("selected-date-input");
+    if (dateInput) {
+      dateInput.value = firstValidFullDateStr;
+      dateInput.setAttribute("data-iso", firstValidDateISO);
+    }
+    loadDynamicSlotsForDate(firstValidDateISO);
   }
 }
 
@@ -393,13 +419,8 @@ function initBookingForm() {
         const passIdEl = document.getElementById('pass-id');
         if (passIdEl) passIdEl.textContent = passId;
 
-        // Trigger server-side notification pipeline via secure outbox pattern.
-        // The submit_counselling_booking RPC creates an outbox entry automatically.
-        // We only need to signal the Edge Function with the outbox record ID (if provided).
-        if (res.outboxId && typeof window.ApexSupabase?.processNotificationOutbox === 'function') {
-          window.ApexSupabase.processNotificationOutbox(res.outboxId)
-            .catch(notifErr => console.warn('Background notification scheduling error:', notifErr));
-        }
+        // Notification dispatch is handled server-side via pg_cron/database webhook.
+        // The submit_counselling_booking RPC already created the outbox record.
 
         const passNameEl = document.getElementById('pass-name');
         if (passNameEl) passNameEl.textContent = name;
@@ -486,17 +507,7 @@ function convertDisplayDateToISO(displayDate) {
   return null;
 }
 
-/**
- * Default time slots (shown when Supabase is not configured or as fallback)
- */
-const DEFAULT_TIME_SLOTS = [
-  '10:30 AM - 11:00 AM',
-  '12:00 PM - 12:30 PM',
-  '03:00 PM - 03:30 PM',
-  '05:00 PM - 05:30 PM',
-  '06:30 PM - 07:00 PM',
-  '07:30 PM - 08:00 PM'
-];
+
 
 /**
  * Render time slot buttons into the slot container
@@ -548,12 +559,79 @@ function renderSlotButtons(slots, container) {
 }
 
 /**
+ * Helper: Validates that a 30-minute slot is strictly within 09:00 AM to 08:00 PM.
+ * Slot format: "HH:MM AM/PM - HH:MM AM/PM"
+ * The final slot must end no later than 08:00 PM (19:30 - 20:00).
+ */
+function isSlotWithinOperatingHours(slotLabel) {
+  if (!slotLabel || typeof slotLabel !== 'string') return false;
+  const parts = slotLabel.split('-').map(s => s.trim());
+  if (parts.length !== 2) return false;
+
+  const parseTime = (str) => {
+    const m = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!m) return null;
+    let hours = parseInt(m[1], 10);
+    const mins = parseInt(m[2], 10);
+    const meridian = m[3].toUpperCase();
+    if (meridian === 'PM' && hours < 12) hours += 12;
+    if (meridian === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + mins;
+  };
+
+  const startMins = parseTime(parts[0]);
+  const endMins = parseTime(parts[1]);
+  if (startMins === null || endMins === null) return false;
+
+  // Window: 09:00 AM (540 mins) to 08:00 PM (1200 mins)
+  return startMins >= 540 && endMins <= 1200;
+}
+
+/**
+ * Helper: If the date is TODAY in Asia/Kolkata, exclude slots that have already passed
+ * or start within 30 minutes.
+ */
+function isSlotInFutureIST(slotLabel, selectedIsoDate) {
+  const nowIST = getNowInIST();
+  const todayISO = `${nowIST.getFullYear()}-${String(nowIST.getMonth() + 1).padStart(2, '0')}-${String(nowIST.getDate()).padStart(2, '0')}`;
+
+  if (selectedIsoDate > todayISO) return true;
+  if (selectedIsoDate < todayISO) return false;
+
+  const parts = slotLabel.split('-').map(s => s.trim());
+  const parseTime = (str) => {
+    const m = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!m) return 0;
+    let hours = parseInt(m[1], 10);
+    const mins = parseInt(m[2], 10);
+    const meridian = m[3].toUpperCase();
+    if (meridian === 'PM' && hours < 12) hours += 12;
+    if (meridian === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + mins;
+  };
+
+  const slotStartMins = parseTime(parts[0]);
+  const currentMins = nowIST.getHours() * 60 + nowIST.getMinutes();
+  return slotStartMins > (currentMins + 30);
+}
+
+let currentSlotRequestId = 0;
+
+/**
  * Load dynamic time slots from Supabase for a specific date.
- * Falls back to DEFAULT_TIME_SLOTS if Supabase is offline or unconfigured.
+ * Shows an error state if Supabase is offline or slots cannot be loaded.
  */
 async function loadDynamicSlotsForDate(isoDate) {
   const container = document.getElementById('slot-buttons-container');
-  if (!container) return; // No slot container in DOM — static slots in HTML
+  if (!container) return;
+
+  const thisRequestId = ++currentSlotRequestId;
+
+  // Clear previous slot selection on date change
+  const slotInputEl = document.getElementById('selected-slot-input');
+  if (slotInputEl) slotInputEl.value = '';
+  const submitBtnEl = document.getElementById('booking-submit-btn');
+  if (submitBtnEl) submitBtnEl.disabled = true;
 
   // Show loading indicator
   container.innerHTML = `
@@ -566,21 +644,107 @@ async function loadDynamicSlotsForDate(isoDate) {
     </div>`;
 
   try {
-    // If Supabase is live, fetch real availability
-    if (typeof window.ApexSupabase !== 'undefined' && window.ApexSupabase.isLive()) {
-      const result = await window.ApexSupabase.getAvailableBookingSlots(isoDate);
-      if (result && result.success && Array.isArray(result.slots) && result.slots.length > 0) {
-        renderSlotButtons(result.slots, container);
+    let result = null;
+
+    if (typeof window.ApexSupabase !== 'undefined' && typeof window.ApexSupabase.getAvailableBookingSlots === 'function') {
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Availability check timeout')), 5000)
+      );
+
+      result = await Promise.race([
+        window.ApexSupabase.getAvailableBookingSlots(isoDate),
+        timeoutPromise
+      ]);
+    } else if (typeof AdminData !== 'undefined' && typeof AdminData.getAvailableBookingSlots === 'function') {
+      result = AdminData.getAvailableBookingSlots(isoDate);
+    }
+
+    // Ignore stale out-of-order response if another date was clicked
+    if (thisRequestId !== currentSlotRequestId) return;
+
+    if (result) {
+      // A. Institute Holiday / Scheduled Break
+      if (result.holiday) {
+        container.innerHTML = `
+          <div class="col-span-full p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-center text-xs sm:text-sm">
+            <span class="font-bold block mb-1">🏛️ Institute Holiday / Closed</span>
+            <span>${result.message || 'The institute is closed on this date. Please select another date.'}</span>
+          </div>`;
+        return;
+      }
+
+      // B. Weekday Unavailable (e.g. Sunday or non-working day)
+      if (result.day_available === false) {
+        container.innerHTML = `
+          <div class="col-span-full p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-center text-xs sm:text-sm">
+            <span class="font-bold block mb-1">📅 No Counselling Sessions Scheduled</span>
+            <span>${result.message || 'Consultations are not scheduled on this day. Please choose another date.'}</span>
+          </div>`;
+        return;
+      }
+
+      // Filter slots to ensure strictly 09:00 AM - 08:00 PM window and future IST time
+      let validSlots = [];
+      if (result.success && Array.isArray(result.slots)) {
+        validSlots = result.slots.filter(s => isSlotWithinOperatingHours(s) && isSlotInFutureIST(s, isoDate));
+      }
+
+      // C. Fully Booked Day
+      if (result.fully_booked || (result.day_available !== false && validSlots.length === 0)) {
+        container.innerHTML = `
+          <div class="col-span-full p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-center text-xs sm:text-sm">
+            <span class="font-bold block mb-1">⏳ All Slots Fully Booked</span>
+            <span>All 1-on-1 strategy sessions are fully booked for this date. Please select an alternate date.</span>
+          </div>`;
+        return;
+      }
+
+      // D. Slots genuinely available for this specific date
+      if (validSlots.length > 0) {
+        renderSlotButtons(validSlots, container);
+        if (submitBtnEl) submitBtnEl.disabled = false;
         return;
       }
     }
+
+    // Check fallback via AdminData if Supabase returned unhandled empty/offline
+    if (typeof AdminData !== 'undefined' && typeof AdminData.getAvailableBookingSlots === 'function') {
+      const fb = AdminData.getAvailableBookingSlots(isoDate);
+      if (thisRequestId !== currentSlotRequestId) return;
+      if (fb && fb.day_available === false) {
+        container.innerHTML = `
+          <div class="col-span-full p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-center text-xs sm:text-sm">
+            <span class="font-bold block mb-1">📅 No Counselling Sessions Scheduled</span>
+            <span>${fb.message || 'Consultations are not scheduled on this day. Please choose another date.'}</span>
+          </div>`;
+        return;
+      }
+      if (fb && Array.isArray(fb.slots)) {
+        const fbSlots = fb.slots.filter(s => isSlotWithinOperatingHours(s) && isSlotInFutureIST(s, isoDate));
+        if (fbSlots.length > 0) {
+          renderSlotButtons(fbSlots, container);
+          if (submitBtnEl) submitBtnEl.disabled = false;
+          return;
+        }
+      }
+    }
   } catch (err) {
-    console.warn('Could not load dynamic slots, using defaults:', err.message);
+    console.warn('Dynamic slot retrieval notice:', err.message);
   }
 
-  // Fallback: use default static slots
-  renderSlotButtons(DEFAULT_TIME_SLOTS, container);
+  // Ignore stale error if another date was clicked
+  if (thisRequestId !== currentSlotRequestId) return;
+
+  // E. Fallback error state with retry
+  container.innerHTML = `
+    <div class="col-span-full p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-center text-xs sm:text-sm">
+      <p class="font-semibold mb-2">Unable to load available time slots for this date.</p>
+      <button type="button" class="btn btn-xs px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-semibold" onclick="loadDynamicSlotsForDate('${isoDate}')">
+        Retry Loading Slots
+      </button>
+    </div>`;
 }
+
 
 function setBookingError(fieldId, errorMsg) {
   const input = document.getElementById(fieldId);

@@ -16,6 +16,37 @@
   let CURRENT_PAGE = 'overview';
   let ACTIVE_FOLLOWUP_TAB = 'all';
 
+  // ─── COUNSELLOR AVAILABILITY STATE ───
+  let SELECTED_AVAIL_COUNSELLOR_ID = null;
+  let LOADED_AVAIL_SCHEDULE = null;
+  let LOADED_AVAIL_UNAVAILABILITY = null;
+
+  async function refreshAvailabilityFromSupabase(targetId) {
+    if (!targetId || !window.ApexSupabase || !window.ApexSupabase.isLive()) return;
+    try {
+      const res = await window.ApexSupabase.getCounsellorAvailabilityConfig(targetId);
+      if (res && res.success) {
+        LOADED_AVAIL_SCHEDULE = { counsellorId: targetId, schedule: res.schedule || [] };
+        LOADED_AVAIL_UNAVAILABILITY = { counsellorId: targetId, list: res.unavailability || [] };
+        if (CURRENT_PAGE === "availability") renderPage();
+      }
+    } catch (e) {
+      console.warn("Could not refresh live availability:", e);
+    }
+  }
+
+
+
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .split('&').join('&amp;')
+      .split('<').join('&lt;')
+      .split('>').join('&gt;')
+      .split('"').join('&quot;')
+      .split("'").join('&#39;');
+  }
+
   /**
    * getSessionFromStorage: Reads cached session from localStorage.
    * This is used only as a quick fallback while Supabase verify runs.
@@ -48,25 +79,56 @@
    * Returns a verified session object or null (triggers redirect to login).
    */
   async function verifySessionWithSupabase() {
-    // If Supabase is live, verify against auth.getSession() + profiles table
+    // If Supabase is configured and live, verify against auth.getSession() + profiles table
     if (window.ApexSupabase && window.ApexSupabase.isLive()) {
       try {
         const c = window.ApexSupabase.getClient();
         const { data: { session }, error: sessErr } = await c.auth.getSession();
 
         if (sessErr || !session) {
-          // No valid Supabase session — redirect to login
           localStorage.removeItem('apex_admin_session');
           window.location.href = 'login.html';
           return null;
         }
 
         // Verify profile is active in DB
-        const { data: profile, error: profErr } = await c
+        let { data: profile, error: profErr } = await c
           .from('profiles')
           .select('id, full_name, email, role, department, specialisation, daily_capacity, phone, is_active')
           .eq('id', session.user.id)
           .single();
+
+        // If direct select failed, attempt self-healing sync RPC if available
+        if ((profErr || !profile) && c.rpc) {
+          try {
+            const { data: synced, error: syncErr } = await c.rpc('get_or_sync_current_profile');
+            if (!syncErr && synced && synced.length > 0) {
+              profile = synced[0];
+              profErr = null;
+            }
+          } catch (e) {
+            console.warn('Profile sync RPC attempt error in admin:', e);
+          }
+        }
+
+        // If still null, check if cached session belongs to the same authenticated user
+        if (profErr || !profile) {
+          const cached = getSessionFromStorage();
+          if (cached && (cached.userId === session.user.id || cached.email === session.user.email)) {
+            profile = {
+              id: cached.userId,
+              full_name: cached.name,
+              email: cached.email,
+              role: cached.role,
+              department: cached.department,
+              specialisation: cached.specialisation,
+              daily_capacity: cached.daily_capacity,
+              phone: cached.phone,
+              is_active: true
+            };
+            profErr = null;
+          }
+        }
 
         if (profErr || !profile) {
           await c.auth.signOut();
@@ -75,15 +137,22 @@
           return null;
         }
 
-        if (!profile.is_active) {
+        if (!profile.role) {
           await c.auth.signOut();
           localStorage.removeItem('apex_admin_session');
-          alert('Account Deactivated: Your staff account has been disabled by the Super Admin. Please contact support.');
+          alert('Access Denied: Account role has not yet been assigned in institute records. Please contact the Super Admin.');
           window.location.href = 'login.html';
           return null;
         }
 
-        // Store verified session in memory
+        if (!profile.is_active) {
+          await c.auth.signOut();
+          localStorage.removeItem('apex_admin_session');
+          alert('Account Deactivated: Your staff account has been disabled by the Super Admin.');
+          window.location.href = 'login.html';
+          return null;
+        }
+
         const verifiedSession = {
           userId: profile.id,
           email: profile.email,
@@ -93,22 +162,27 @@
           specialisation: profile.specialisation,
           phone: profile.phone,
           daily_capacity: profile.daily_capacity,
-          loginTime: new Date().toISOString()
+          loginTime: new Date().toISOString(),
+          supabaseLive: true
         };
 
-        // Update localStorage cache (not authoritative, just for display)
+        // Cache for display only — NEVER used for auth decisions
         localStorage.setItem('apex_admin_session', JSON.stringify({ user: verifiedSession, loginTime: verifiedSession.loginTime }));
 
         return verifiedSession;
       } catch (e) {
-        console.warn('Supabase session verification error:', e);
-        // Fall through to localStorage fallback
+        // FAIL CLOSED — Supabase is configured but errored. Do NOT fall through to localStorage.
+        console.error('Supabase session verification failed:', e);
+        localStorage.removeItem('apex_admin_session');
+        window.location.href = 'login.html?error=auth_error';
+        return null;
       }
     }
 
-    // Demo / offline mode: fall back to localStorage session
+    // Supabase is NOT configured — demo/offline mode with localStorage
     const cached = getSessionFromStorage();
     if (cached) {
+      cached.supabaseLive = false;
       return cached;
     }
 
@@ -120,6 +194,310 @@
   // Legacy alias kept for backward compatibility with any direct calls
   function getSession() {
     return getSessionFromStorage();
+  }
+
+  // Determine whether to use Supabase or AdminData for dashboard data
+  function useSupabaseData() {
+    return Boolean(window.ApexSupabase && window.ApexSupabase.isLive());
+  }
+
+  /**
+   * Sync live Supabase data into AdminData's internal arrays.
+   * This bridges Supabase (source of truth) with AdminData (UI rendering layer).
+   * Uses dedicated RPCs where available, with safe PostgREST and timeout guards.
+   */
+  async function syncFromSupabase() {
+    if (!useSupabaseData()) return;
+
+    try {
+      const c = window.ApexSupabase.getClient();
+
+      // Timeout guard: 8 seconds maximum so UI rendering is never indefinitely stalled
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Sync timeout')), 8000));
+
+      const fetchPromise = Promise.allSettled([
+        // 1. Enquiries
+        c.rpc('get_dashboard_enquiries', { p_limit: 200, p_offset: 0 }).then(r => {
+          if (r.error || !r.data?.success) throw r.error || new Error('RPC error');
+          return r.data.data || [];
+        }).catch(() => {
+          return c.from('admission_enquiries')
+            .select('*, students(full_name, phone, email, qualification)')
+            .order('created_at', { ascending: false })
+            .limit(200)
+            .then(res => (res.data || []).map(e => ({
+              id: e.id,
+              student_id: e.student_id,
+              student_name: e.students?.full_name || 'Unknown',
+              phone: e.students?.phone || '',
+              email: e.students?.email || '',
+              qualification: e.students?.qualification || '',
+              course_id: e.course_id,
+              course_category: e.course_category,
+              target_examination: e.target_examination,
+              preferred_batch_timing: e.preferred_batch_timing || e.preferred_batch || '',
+              preferred_learning_mode: e.preferred_learning_mode || e.learning_mode || '',
+              additional_message: e.additional_message || '',
+              status: e.status ? e.status.toLowerCase() : 'new',
+              assigned_counsellor_id: e.assigned_counsellor_id,
+              created_at: e.created_at,
+              updated_at: e.updated_at
+            })));
+        }),
+
+        // 2. Bookings
+        c.rpc('get_dashboard_bookings', { p_limit: 200, p_offset: 0 }).then(r => {
+          if (r.error || !r.data?.success) throw r.error || new Error('RPC error');
+          return r.data.data || [];
+        }).catch(() => {
+          return c.from('counselling_bookings')
+            .select('*, students(full_name, phone, email)')
+            .order('created_at', { ascending: false })
+            .limit(200)
+            .then(res => (res.data || []).map(b => ({
+              id: b.id,
+              student_id: b.student_id,
+              student_name: b.student_name || b.students?.full_name || 'Unknown',
+              phone: b.students?.phone || '',
+              email: b.students?.email || '',
+              course_id: b.course_id,
+              course_category: b.course_category,
+              target_examination: b.target_examination,
+              preferred_date: b.preferred_date,
+              preferred_time: b.preferred_time,
+              session_medium: b.session_medium || 'Online Video Meeting (Google Meet)',
+              google_meet_link: b.google_meet_link,
+              status: b.status ? b.status.toLowerCase() : 'pending',
+              assigned_counsellor_id: b.assigned_counsellor_id,
+              created_at: b.created_at,
+              updated_at: b.updated_at
+            })));
+        }),
+
+        // 3. Profiles / Counsellors (fetch all staff including unassigned for Super Admin oversight)
+        c.from('profiles')
+          .select('id, full_name, email, phone, role, department, specialisation, is_active, daily_capacity, created_at')
+          .order('full_name')
+          .then(res => res.data || []),
+
+        // 4. Activity Logs
+        c.rpc('get_dashboard_activity_log', { p_limit: 100 }).then(r => {
+          if (r.error || !r.data?.success) throw r.error || new Error('RPC error');
+          return r.data.data || [];
+        }).catch(() => {
+          return c.from('activity_logs')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100)
+            .then(res => res.data || []);
+        }),
+
+        // 5. Notes & Follow-ups
+        c.from('enquiry_notes').select('*').order('created_at', { ascending: true }).then(r => r.data || []),
+        c.from('booking_notes').select('*').order('created_at', { ascending: true }).then(r => r.data || []),
+        c.rpc('get_dashboard_follow_ups').then(r => {
+          if (r.error || !r.data?.success) throw r.error || new Error('RPC error');
+          return r.data.data || [];
+        }).catch(() => {
+          return c.from('follow_ups').select('*, profiles!assigned_to(full_name)').order('follow_up_date', { ascending: true }).then(r => r.data || []);
+        }),
+
+        // 6. Communication Logs (Email Audit)
+        c.rpc('get_dashboard_communication_logs', { p_limit: 150, p_offset: 0 }).then(r => {
+          if (r.error || !r.data?.success) throw r.error || new Error('RPC error');
+          return r.data.data || [];
+        }).catch(() => {
+          return c.from('communication_logs')
+            .select('*, students(full_name, phone, email), profiles!actor_id(full_name)')
+            .order('created_at', { ascending: false })
+            .limit(150)
+            .then(res => (res.data || []).map(cl => ({
+              id: cl.id,
+              student_id: cl.student_id,
+              student_name: cl.students?.full_name || 'Student',
+              counsellor_id: cl.counsellor_id,
+              actor_id: cl.actor_id,
+              actor_name: cl.profiles?.full_name || 'Staff',
+              channel: cl.channel,
+              message_type: cl.message_type,
+              recipient: cl.recipient,
+              template_ref: cl.template_ref,
+              provider_message_id: cl.provider_message_id,
+              status: cl.status,
+              error_details: cl.error_details,
+              metadata: cl.metadata,
+              created_at: cl.created_at,
+              updated_at: cl.updated_at
+            })));
+        })
+      ]);
+
+      const [enqResult, bkResult, counResult, actResult, enqNotesResult, bkNotesResult, fuResult, commResult] = await Promise.race([
+        fetchPromise,
+        timeoutPromise
+      ]);
+
+      const rawEnquiries = enqResult.status === 'fulfilled' ? (enqResult.value || []) : [];
+      const rawBookings = bkResult.status === 'fulfilled' ? (bkResult.value || []) : [];
+      const counsellors = counResult.status === 'fulfilled' ? (counResult.value || []) : [];
+      const activity = actResult.status === 'fulfilled' ? (actResult.value || []) : [];
+      const enquiryNotes = enqNotesResult.status === 'fulfilled' ? (enqNotesResult.value || []) : [];
+      const bookingNotes = bkNotesResult.status === 'fulfilled' ? (bkNotesResult.value || []) : [];
+      const followUps = fuResult.status === 'fulfilled' ? (fuResult.value || []) : [];
+      const commLogs = (commResult && commResult.status === 'fulfilled') ? (commResult.value || []) : [];
+
+      if (typeof AdminData !== 'undefined') {
+        const liveEnquiries = rawEnquiries.map(e => {
+          const notes = enquiryNotes.filter(n => n.enquiry_id === e.id).map(n => ({
+            id: n.id,
+            text: n.note_text,
+            addedBy: n.author_name || 'Staff',
+            addedAt: n.created_at
+          }));
+          const fus = followUps.filter(f => f.enquiry_id === e.id).map(f => ({
+            id: f.id,
+            date: f.follow_up_date,
+            time: f.follow_up_time,
+            purpose: f.notes || f.follow_up_type || 'Follow-up Consultation',
+            status: f.status === 'completed' ? 'completed' : 'upcoming',
+            counsellorId: f.assigned_to
+          }));
+          return {
+            id: e.id,
+            studentId: e.student_id,
+            studentName: e.student_name || e.students?.full_name || 'Student Aspirant',
+            mobile: e.phone || e.students?.phone || '',
+            phone: e.phone || e.students?.phone || '',
+            email: e.email || e.students?.email || '',
+            qualification: e.qualification || e.students?.qualification || '',
+            courseCategory: e.course_category || 'Civil Services & SSC Exam Preparation',
+            courseCategoryId: e.course_id || 'civil-services-ssc',
+            targetExamination: e.target_examination || 'UPSC CSE',
+            preferredBatch: e.preferred_batch_timing || e.preferred_batch || '',
+            learningMode: e.preferred_learning_mode || e.learning_mode || '',
+            message: e.additional_message || '',
+            status: e.status ? e.status.toLowerCase() : 'new',
+            assignedCounsellor: e.assigned_counsellor_id,
+            submittedAt: e.created_at,
+            updatedAt: e.updated_at,
+            notes: notes,
+            followUps: fus
+          };
+        });
+
+        const liveBookings = rawBookings.map(b => {
+          const notes = bookingNotes.filter(n => n.booking_id === b.id).map(n => ({
+            id: n.id,
+            text: n.note_text,
+            addedBy: n.author_name || 'Staff',
+            addedAt: n.created_at
+          }));
+          const fus = followUps.filter(f => f.booking_id === b.id).map(f => ({
+            id: f.id,
+            date: f.follow_up_date,
+            time: f.follow_up_time,
+            purpose: f.notes || f.follow_up_type || 'Follow-up Strategy Call',
+            status: f.status === 'completed' ? 'completed' : 'upcoming',
+            counsellorId: f.assigned_to
+          }));
+          return {
+            id: b.id,
+            studentId: b.student_id,
+            studentName: b.student_name || b.students?.full_name || 'Student Aspirant',
+            mobile: b.phone || b.students?.phone || '',
+            phone: b.phone || b.students?.phone || '',
+            email: b.email || b.students?.email || '',
+            courseCategory: b.course_category || 'Civil Services & SSC Exam Preparation',
+            courseCategoryId: b.course_id || 'civil-services-ssc',
+            targetExamination: b.target_examination || 'UPSC CSE',
+            preferredDate: b.preferred_date,
+            preferredTime: b.preferred_time || '10:00 AM',
+            sessionMedium: b.session_medium || 'Online Video Meeting (Google Meet)',
+            status: b.status ? b.status.toLowerCase() : 'pending',
+            assignedCounsellor: b.assigned_counsellor_id,
+            googleMeetLink: b.google_meet_link,
+            submittedAt: b.created_at,
+            updatedAt: b.updated_at,
+            notes: notes,
+            followUps: fus
+          };
+        });
+
+        let allLiveStaff = [];
+        if (counsellors.length > 0) {
+          allLiveStaff = counsellors.map(co => {
+            const assignedEnqCount = liveEnquiries.filter(e => e.assignedCounsellor === co.id).length;
+            const assignedBkCount = liveBookings.filter(b => b.assignedCounsellor === co.id).length;
+            const completedCount = liveBookings.filter(b => b.assignedCounsellor === co.id && b.status === 'completed').length;
+            const convertedCount = liveEnquiries.filter(e => e.assignedCounsellor === co.id && e.status === 'converted').length;
+            const totalWork = assignedEnqCount + assignedBkCount;
+            const convRate = totalWork > 0 ? Math.round((convertedCount / totalWork) * 100) : 0;
+            return {
+              id: co.id,
+              name: co.full_name,
+              email: co.email,
+              phone: co.phone || '',
+              role: co.role,
+              department: co.department || (co.role === 'admission_counsellor' ? 'Admission Department' : co.role === 'academic_counsellor' ? 'Academic Counselling Department' : (co.role === 'super_admin' ? 'Executive Administration' : 'General Administration')),
+              specialisation: co.specialisation || '',
+              status: co.is_active ? 'active' : 'inactive',
+              is_active: Boolean(co.is_active),
+              dailyCapacity: co.daily_capacity || 10,
+              assignedEnquiries: assignedEnqCount,
+              assignedBookings: assignedBkCount,
+              completedTasks: completedCount,
+              conversionRate: convRate,
+              joinDate: co.created_at || '2025-06-15'
+            };
+          });
+        }
+
+        // Distinctly separate actual counsellors from Super Admin
+        const liveCounsellors = allLiveStaff.filter(co => co.role === 'admission_counsellor' || co.role === 'academic_counsellor');
+
+        let liveActivity = [];
+        if (activity.length > 0) {
+          liveActivity = activity.map(a => ({
+            id: a.id,
+            type: a.action_type,
+            action: a.action_type,
+            message: a.description || a.message || 'Action executed',
+            description: a.description || a.message || 'Action executed',
+            performedBy: a.actor_name || 'Staff',
+            performedAt: a.created_at,
+            time: new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            entityType: a.target_entity_type || a.entity_type || '',
+            entityId: a.target_entity_id || a.entity_id || ''
+          }));
+        }
+
+        if (typeof AdminData.setLiveRecords === 'function') {
+          AdminData.setLiveRecords({
+            enquiries: liveEnquiries,
+            bookings: liveBookings,
+            staff: allLiveStaff,
+            counsellors: liveCounsellors,
+            activity: liveActivity,
+            communicationLogs: commLogs
+          });
+        } else {
+          AdminData.enquiries = liveEnquiries;
+          AdminData.bookings = liveBookings;
+          if (liveCounsellors.length > 0) AdminData.counsellors = liveCounsellors;
+          if (liveActivity.length > 0) AdminData.activity = liveActivity;
+          if (commLogs.length > 0 && typeof AdminData.setCommunicationLogs === 'function') {
+            AdminData.setCommunicationLogs(commLogs);
+          }
+        }
+
+        console.log('✔ Admin data synced from Supabase successfully.');
+        if (typeof AdminData.saveAll === 'function') {
+          AdminData.saveAll();
+        }
+      }
+    } catch (e) {
+      console.warn('Supabase data sync notice — using existing AdminData cache:', e);
+    }
   }
 
   async function logout() {
@@ -178,6 +556,7 @@
       ]},
       { group: 'Institute Operations', items: [
         { id: 'courses', label: 'Courses & Batches', icon: 'courses' },
+        { id: 'availability', label: 'Counsellor Availability', icon: 'schedule' },
         { id: 'reports', label: 'Reports & Analytics', icon: 'reports' },
         { id: 'settings', label: 'Settings', icon: 'settings' },
       ]},
@@ -206,6 +585,7 @@
         { id: 'schedule', label: "Today's Schedule", icon: 'schedule' },
         { id: 'followups', label: 'Pending Follow-ups', icon: 'followups' },
         { id: 'history', label: 'Counselling History', icon: 'history' },
+        { id: 'availability', label: 'Availability & Slots', icon: 'schedule' },
         { id: 'settings', label: 'Mentor Profile', icon: 'profile' },
       ]},
       { group: '', items: [
@@ -241,7 +621,7 @@
 
   function initials(name) {
     if (!name) return '?';
-    return name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+    return name.split(' ').filter(Boolean).map(w => w[0]).join('').substring(0, 2).toUpperCase() || '?';
   }
 
   function statusBadge(status) {
@@ -338,18 +718,21 @@
   function buildSidebar() {
     const nav = $('#sidebarNav');
     if (!nav) return;
+    if (!SESSION) return;
     const config = NAV_CONFIG[SESSION.role] || NAV_CONFIG.super_admin;
-    const stats = AdminData.getStats(SESSION.role, SESSION.userId);
+    const stats = (typeof AdminData !== 'undefined' && typeof AdminData.getStats === 'function') 
+      ? (AdminData.getStats(SESSION.role, SESSION.userId) || {}) 
+      : {};
 
     let html = '';
     config.forEach(group => {
       html += '<div class="sidebar-nav-group">';
       if (group.group) html += `<div class="sidebar-nav-group-label">${group.group}</div>`;
       group.items.forEach(item => {
-        const badge = item.id === 'admissions' && SESSION.role === 'super_admin' ? stats.newEnquiries :
-                      item.id === 'admissions' && SESSION.role === 'admission_counsellor' ? stats.newEnquiries :
-                      item.id === 'counselling' && SESSION.role === 'super_admin' ? stats.pendingBookings :
-                      item.id === 'followups' ? stats.todayFollowUps : 0;
+        const badge = item.id === 'admissions' && SESSION.role === 'super_admin' ? (stats.newEnquiries || 0) :
+                      item.id === 'admissions' && SESSION.role === 'admission_counsellor' ? (stats.newEnquiries || 0) :
+                      item.id === 'counselling' && SESSION.role === 'super_admin' ? (stats.pendingBookings || 0) :
+                      item.id === 'followups' ? (stats.todayFollowUps || 0) : 0;
         const isActive = CURRENT_PAGE === item.id;
         if (item.href) {
           html += `<a href="${item.href}" target="${item.external ? '_blank' : '_self'}" class="sidebar-nav-item">${ICONS[item.icon] || ''}<span>${item.label}</span></a>`;
@@ -363,11 +746,15 @@
     });
     nav.innerHTML = html;
 
-    // Sidebar footer and role badges
-    $('#sidebarRoleLabel').textContent = formatRole(SESSION.role);
-    $('#userName').textContent = SESSION.name;
-    $('#userRole').textContent = SESSION.department;
-    $('#userAvatar').textContent = initials(SESSION.name);
+    // Sidebar footer and role badges (Safely guarded)
+    const roleLabel = $('#sidebarRoleLabel');
+    if (roleLabel) roleLabel.textContent = formatRole(SESSION.role);
+    const uName = $('#userName');
+    if (uName) uName.textContent = SESSION.name || 'Staff Member';
+    const uRole = $('#userRole');
+    if (uRole) uRole.textContent = SESSION.department || formatRole(SESSION.role);
+    const uAvatar = $('#userAvatar');
+    if (uAvatar) uAvatar.textContent = initials(SESSION.name || 'Staff');
 
     // Nav click handlers
     nav.querySelectorAll('[data-page]').forEach(btn => {
@@ -397,6 +784,13 @@
     $('#adminSidebar').classList.remove('open');
     $('#sidebarOverlay').classList.remove('active');
     document.body.classList.remove('no-scroll');
+  }
+
+  function syncRoleSwitcher() {
+    const switcher = $('#roleSwitcher');
+    if (switcher && SESSION) {
+      switcher.value = SESSION.role;
+    }
   }
 
   
@@ -550,7 +944,7 @@
       {
         target: 'a[data-page="followups"]',
         title: 'Follow-up Call Scheduler',
-        desc: 'Track today's scheduled callback reminders and plan upcoming follow-up calls to keep prospective students engaged.'
+        desc: "Track today's scheduled callback reminders and plan upcoming follow-up calls to keep prospective students engaged."
       },
       {
         target: 'a[data-page="performance"]',
@@ -567,11 +961,11 @@
       {
         target: '.stat-grid',
         title: 'Session Caseload & Schedule',
-        desc: 'Track today's scheduled appointments, upcoming video sessions, completed guidance reviews, and pending follow-ups.'
+        desc: "Track today's scheduled appointments, upcoming video sessions, completed guidance reviews, and pending follow-ups."
       },
       {
         target: 'a[data-page="schedule"]',
-        title: 'Today's 1-on-1 Schedule',
+        title: "Today's 1-on-1 Schedule",
         desc: 'Review all sessions scheduled for today organized by 30-minute time windows and exam preparation categories.'
       },
       {
@@ -597,7 +991,7 @@
       {
         target: '#pageContent',
         title: 'Unified Student Dossier',
-        desc: 'Inspect the aspirant's complete journey, including past admission enquiries and previous counselling feedback.'
+        desc: "Inspect the aspirant's complete journey, including past admission enquiries and previous counselling feedback."
       }
     ]
   };
@@ -840,7 +1234,11 @@
   };
 
   // ─── GOOGLE MEET HANDLERS ───
-  window._adminSaveMeetLink = function(id) {
+  window._adminSaveMeetLink = async function(id) {
+    if (SESSION.role !== 'super_admin') {
+      showToast('Unauthorized', 'Only Super Admins can set or update Google Meet links.', 'error');
+      return;
+    }
     const linkInput = document.getElementById('drawerMeetLinkInput');
     if (!linkInput) return;
     const link = linkInput.value.trim();
@@ -868,7 +1266,11 @@
     showBookingDetail(id);
   };
 
-  window._adminGenerateMeetLink = function(id) {
+  window._adminGenerateMeetLink = async function(id) {
+    if (SESSION.role !== 'super_admin') {
+      showToast('Unauthorized', 'Only Super Admins can set or update Google Meet links.', 'error');
+      return;
+    }
     const linkInput = document.getElementById('drawerMeetLinkInput');
     const existingVal = linkInput ? linkInput.value : '';
     const enteredUrl = prompt('Enter your official Google Meet conference URL (e.g. https://meet.google.com/xxx-yyyy-zzz):', existingVal);
@@ -912,14 +1314,14 @@
     // ─── ROUTE GUARDS & PERMISSION VALIDATION ───
   function isPageAllowedForRole(page, role) {
     const roleAllowed = {
-      super_admin: ['overview', 'admissions', 'counselling', 'counsellors', 'followups', 'courses', 'reports', 'settings'],
+      super_admin: ['overview', 'admissions', 'counselling', 'counsellors', 'followups', 'courses', 'reports', 'availability', 'settings'],
       admission_counsellor: ['overview', 'admissions', 'followups', 'reports', 'settings'],
-      academic_counsellor: ['overview', 'schedule', 'counselling', 'history', 'followups', 'settings']
+      academic_counsellor: ['overview', 'schedule', 'counselling', 'history', 'followups', 'availability', 'settings']
     };
     return (roleAllowed[role] || []).includes(page);
   }
 
-    function renderPage() {
+  function renderPage() {
     if (!SESSION) return;
     if (!isPageAllowedForRole(CURRENT_PAGE, SESSION.role)) {
       console.warn(`Unauthorized view attempt: ${CURRENT_PAGE} for role ${SESSION.role}`);
@@ -928,6 +1330,8 @@
       window.location.hash = '#overview';
     }
     const content = $('#pageContent');
+    if (!content) return;
+
     const titleMap = {
       overview: 'Overview Dashboard',
       admissions: SESSION.role === 'super_admin' ? 'Admission Enquiry Management' : 'My Assigned Admission Leads',
@@ -938,28 +1342,42 @@
       reports: SESSION.role === 'super_admin' ? 'Reports & Institute Analytics' : 'My Performance & Conversion Metrics',
       settings: SESSION.role === 'super_admin' ? 'Administrative Settings & Profile' : 'Counsellor Profile',
       schedule: "Today's Appointment Schedule",
-      history: 'Completed Counselling History'
+      history: 'Completed Counselling History',
+      availability: SESSION.role === 'super_admin' ? 'Institute Counsellor Availability & Scheduling' : 'My Weekly Availability & Holiday Schedule'
     };
 
-    $('#pageTitle').textContent = titleMap[CURRENT_PAGE] || 'Overview';
-    $('#pageBreadcrumb').textContent = titleMap[CURRENT_PAGE] || 'Overview';
+    const pTitle = $('#pageTitle');
+    if (pTitle) pTitle.textContent = titleMap[CURRENT_PAGE] || 'Overview';
+    const pBreadcrumb = $('#pageBreadcrumb');
+    if (pBreadcrumb) pBreadcrumb.textContent = titleMap[CURRENT_PAGE] || 'Overview';
 
-    switch (CURRENT_PAGE) {
-      case 'overview': content.innerHTML = renderOverview(); break;
-      case 'admissions': content.innerHTML = renderAdmissions(); break;
-      case 'counselling': content.innerHTML = renderCounselling(); break;
-      case 'counsellors': content.innerHTML = renderCounsellors(); break;
-      case 'followups': content.innerHTML = renderFollowUps(); break;
-      case 'courses': content.innerHTML = renderCourses(); break;
-      case 'reports': content.innerHTML = renderReports(); break;
-      case 'settings': content.innerHTML = renderSettings(); break;
-      case 'schedule': content.innerHTML = renderSchedule(); break;
-      case 'history': content.innerHTML = renderHistory(); break;
-      default: content.innerHTML = renderOverview();
+    try {
+      switch (CURRENT_PAGE) {
+        case 'overview': content.innerHTML = renderOverview(); break;
+        case 'admissions': content.innerHTML = renderAdmissions(); break;
+        case 'counselling': content.innerHTML = renderCounselling(); break;
+        case 'counsellors': content.innerHTML = renderCounsellors(); break;
+        case 'followups': content.innerHTML = renderFollowUps(); break;
+        case 'courses': content.innerHTML = renderCourses(); break;
+        case 'reports': content.innerHTML = renderReports(); break;
+        case 'settings': content.innerHTML = renderSettings(); break;
+        case 'schedule': content.innerHTML = renderSchedule(); break;
+        case 'history': content.innerHTML = renderHistory(); break;
+        case 'availability': content.innerHTML = renderAvailability(); break;
+        default: content.innerHTML = renderOverview();
+      }
+      attachPageHandlers();
+      content.scrollTop = 0;
+    } catch (renderError) {
+      console.error('Page rendering notice on module:', CURRENT_PAGE, renderError);
+      content.innerHTML = `
+        <div class="admin-card" style="padding:2.5rem;text-align:center;">
+          <div style="font-size:2rem;margin-bottom:0.75rem;">📋</div>
+          <h3 style="font-weight:700;color:#0F172A;margin-bottom:0.5rem;">Dashboard Module Ready</h3>
+          <p style="color:#64748B;font-size:0.875rem;margin-bottom:1.25rem;">Data is being calibrated for this section.</p>
+          <button class="btn btn-sm btn-primary" onclick="renderPage()">Refresh View</button>
+        </div>`;
     }
-
-    attachPageHandlers();
-    content.scrollTop = 0;
   }
 
   // ══════════════════════════════════════════════
@@ -1069,7 +1487,7 @@
                       <td style="font-weight:600;">${b.studentName}</td>
                       <td style="font-size:0.75rem;">+91 ${b.mobile}</td>
                       <td style="font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.targetExamination}</td>
-                      <td style="font-size:0.75rem;">${b.sessionMedium.split('(')[0].trim()}</td>
+                      <td style="font-size:0.75rem;">${b.sessionMedium ? b.sessionMedium.split('(')[0].trim() : '1-on-1 Session'}</td>
                       <td>${statusBadge(b.status)}</td>
                       <td><button class="btn btn-xs btn-outline view-booking-btn" data-id="${b.id}">${ICONS.eye} Session</button></td>
                     </tr>
@@ -1082,18 +1500,21 @@
     }
 
     // 3. Super Admin Overview
-    const recentEnquiries = AdminData.enquiries.slice(0, 5);
-    const upcomingBookings = AdminData.bookings.filter(b => b.status === 'confirmed' || b.status === 'assigned').slice(0, 5);
-    const activeCounsellors = AdminData.counsellors.filter(c => c.status === 'active');
+    const recentEnquiries = (AdminData.enquiries || []).slice(0, 5);
+    const upcomingBookings = (AdminData.bookings || []).filter(b => b.status === 'confirmed' || b.status === 'assigned').slice(0, 5);
+    const activeCounsellors = (AdminData.counsellors || []).filter(c => c.status === 'active');
+    const commStats = typeof AdminData.getCommunicationStats === 'function'
+      ? AdminData.getCommunicationStats()
+      : { totalEmails: 0, sent: 0, delivered: 0, read: 0, failed: 0 };
 
     return `
       <div class="stat-grid section-gap">
-        ${statCard('Total Admission Enquiries', s.totalEnquiries, '#1E3A8A', '#EFF6FF', 'From website forms')}
-        ${statCard('New Enquiries', s.newEnquiries, '#D97706', '#FEF3C7', 'Action required')}
-        ${statCard('Pending Bookings', s.pendingBookings, '#F59E0B', '#FFFBEB', 'Counselling requests')}
-        ${statCard('Confirmed Appointments', s.confirmedBookings, '#059669', '#ECFDF5', 'Mentors assigned')}
-        ${statCard('Active Counsellors', s.totalCounsellors, '#7C3AED', '#F5F3FF', 'Across 2 departments')}
-        ${statCard('Converted Admissions', s.convertedEnquiries, '#059669', '#ECFDF5', 'Cohort admissions')}
+        ${statCard('Total Admission Enquiries', s.totalEnquiries || 0, '#1E3A8A', '#EFF6FF', 'From website forms')}
+        ${statCard('New Enquiries', s.newEnquiries || 0, '#D97706', '#FEF3C7', 'Action required')}
+        ${statCard('Pending Bookings', s.pendingBookings || 0, '#F59E0B', '#FFFBEB', 'Counselling requests')}
+        ${statCard('Confirmed Appointments', s.confirmedBookings || 0, '#059669', '#ECFDF5', 'Mentors assigned')}
+        ${statCard('Active Counsellors', s.totalCounsellors || 0, '#7C3AED', '#F5F3FF', 'Across 2 departments')}
+        ${statCard('Converted Admissions', s.convertedEnquiries || 0, '#059669', '#ECFDF5', 'Cohort admissions')}
       </div>
 
       <div class="grid-2 section-gap">
@@ -1111,15 +1532,15 @@
               <table class="data-table">
                 <thead><tr><th>Student</th><th>Course</th><th>Date</th><th>Counsellor</th><th>Status</th></tr></thead>
                 <tbody>
-                  ${recentEnquiries.map(e => `
+                  ${recentEnquiries.length ? recentEnquiries.map(e => `
                     <tr>
-                      <td style="font-weight:600;">${e.studentName}</td>
+                      <td style="font-weight:600;">${e.studentName || 'Student'}</td>
                       <td><span class="tag" style="background:#EFF6FF;color:#1E3A8A;font-size:0.625rem;">${e.courseCategoryId === 'civil-services-ssc' ? 'Civil/SSC' : e.courseCategoryId === 'banking-railway' ? 'Bank/Rly' : 'Foundation'}</span></td>
                       <td style="font-size:0.75rem;">${formatDate(e.submittedAt)}</td>
                       <td style="font-size:0.75rem;">${AdminData.getCounsellorName(e.assignedCounsellor)}</td>
                       <td>${statusBadge(e.status)}</td>
                     </tr>
-                  `).join('')}
+                  `).join('') : '<tr><td colspan="5" class="empty-state" style="text-align:center;padding:1.5rem;color:#64748B;">No admission enquiries recorded yet</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -1140,15 +1561,15 @@
               <table class="data-table">
                 <thead><tr><th>Student</th><th>Date</th><th>Time</th><th>Academic Mentor</th><th>Status</th></tr></thead>
                 <tbody>
-                  ${upcomingBookings.map(b => `
+                  ${upcomingBookings.length ? upcomingBookings.map(b => `
                     <tr>
-                      <td style="font-weight:600;">${b.studentName}</td>
+                      <td style="font-weight:600;">${b.studentName || 'Student'}</td>
                       <td style="font-size:0.75rem;">${formatDate(b.preferredDate)}</td>
-                      <td style="font-size:0.75rem;">${b.preferredTime}</td>
+                      <td style="font-size:0.75rem;">${b.preferredTime || '10:00 AM'}</td>
                       <td style="font-size:0.75rem;">${AdminData.getCounsellorName(b.assignedCounsellor)}</td>
                       <td>${statusBadge(b.status)}</td>
                     </tr>
-                  `).join('')}
+                  `).join('') : '<tr><td colspan="5" class="empty-state" style="text-align:center;padding:1.5rem;color:#64748B;">No upcoming counselling sessions scheduled</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -1167,19 +1588,19 @@
             <button class="btn btn-xs btn-outline" data-page="counsellors">Manage Staff</button>
           </div>
           <div class="admin-card-body">
-            ${activeCounsellors.map(c => `
+            ${activeCounsellors.filter(c => c.role !== 'super_admin').length ? activeCounsellors.filter(c => c.role !== 'super_admin').map(c => `
               <div style="display:flex;align-items:center;gap:0.75rem;padding:0.625rem 0;border-bottom:1px solid #F1F5F9;">
-                <div class="sidebar-user-avatar" style="width:36px;height:36px;font-size:0.75rem;background:#EFF6FF;color:#1E3A8A;border:1px solid #DBEAFE;">${initials(c.name)}</div>
+                <div class="sidebar-user-avatar" style="width:36px;height:36px;font-size:0.75rem;background:#EFF6FF;color:#1E3A8A;border:1px solid #DBEAFE;">${initials(c.name || 'Staff')}</div>
                 <div style="flex:1;min-width:0;">
-                  <div style="font-weight:700;font-size:0.8125rem;">${c.name}</div>
-                  <div style="font-size:0.6875rem;color:#64748B;">${c.department}</div>
+                  <div style="font-weight:700;font-size:0.8125rem;">${escapeHtml(c.name || 'Staff Member')}</div>
+                  <div style="font-size:0.6875rem;color:#64748B;">${escapeHtml(c.department || (c.role === 'academic_counsellor' ? 'Academic Counselling Department' : 'Admission Department'))}</div>
                 </div>
                 <div style="text-align:right;">
-                  <div style="font-size:0.8125rem;font-weight:700;">${c.assignedEnquiries + c.assignedBookings} Assigned</div>
-                  <div style="font-size:0.6875rem;color:#059669;font-weight:600;">${c.conversionRate ? c.conversionRate + '% Conv.' : c.completedTasks + ' Done'}</div>
+                  <div style="font-size:0.8125rem;font-weight:700;">${(c.assignedEnquiries || 0) + (c.assignedBookings || 0)} Assigned</div>
+                  <div style="font-size:0.6875rem;color:#059669;font-weight:600;">${c.conversionRate ? c.conversionRate + '% Conv.' : (c.completedTasks || 0) + ' Done'}</div>
                 </div>
               </div>
-            `).join('')}
+            `).join('') : '<div style="text-align:center;padding:1.5rem;color:#64748B;font-size:0.8125rem;">No active counsellor workload records. Provision counsellors from the Counsellors section to track assignments.</div>'}
           </div>
         </div>
 
@@ -1192,15 +1613,42 @@
             </div>
           </div>
           <div class="admin-card-body">
-            ${AdminData.activity.slice(0, 6).map(a => `
+            ${(AdminData.activity || []).length ? AdminData.activity.slice(0, 6).map(a => `
               <div class="activity-item">
                 <div class="activity-icon" style="background:#F8FAFC;color:#1E3A8A;border:1px solid #E2E8F0;">${ICONS[a.icon] || ICONS.note}</div>
                 <div style="flex:1;">
-                  <div class="activity-text">${a.message}</div>
-                  <div class="activity-time">${a.time}</div>
+                  <div class="activity-text">${a.message || a.description || 'System activity'}</div>
+                  <div class="activity-time">${a.time || formatDate(a.performedAt)}</div>
                 </div>
               </div>
-            `).join('')}
+            `).join('') : '<div style="text-align:center;padding:1.5rem;color:#64748B;font-size:0.8125rem;">No activity recorded yet</div>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- Automated Communication Center -->
+      <div class="admin-card section-gap" style="margin-top:1.25rem;">
+        <div class="admin-card-header">
+          <div>
+            <h3 class="admin-card-title">Automated Communication Center</h3>
+            <p style="font-size:0.75rem;color:#64748B;">Institute-wide Email dispatch metrics (Identity: APEX ACADEMY)</p>
+          </div>
+          <span class="badge" style="background:#EFF6FF;color:#1E40AF;font-weight:600;font-size:0.75rem;">Official Display: APEX ACADEMY</span>
+        </div>
+        <div class="admin-card-body">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+            <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:1.25rem;font-weight:700;color:#1E3A8A;">✉️ ${commStats.totalEmails}</div>
+              <div style="font-size:0.75rem;color:#64748B;font-weight:500;">Emails Dispatched</div>
+            </div>
+            <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:1.25rem;font-weight:700;color:#059669;">✔ ${commStats.sent + commStats.delivered + commStats.read}</div>
+              <div style="font-size:0.75rem;color:#64748B;font-weight:500;">Delivered / Sent</div>
+            </div>
+            <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:1.25rem;font-weight:700;color:${commStats.failed > 0 ? '#DC2626' : '#64748B'};">⚠ ${commStats.failed}</div>
+              <div style="font-size:0.75rem;color:#64748B;font-weight:500;">Failed / Errors</div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -1315,33 +1763,33 @@
   }
 
   function renderEnquiryRows(enqs) {
-    if (!enqs.length) {
+    if (!enqs || !enqs.length) {
       return `<tr><td colspan="11"><div class="empty-state"><div class="empty-state-title">No admission enquiries match criteria</div><div class="empty-state-text">Try adjusting or clearing the search query or filters.</div></div></td></tr>`;
     }
     const isSuperAdmin = SESSION.role === 'super_admin';
     return enqs.map(e => `
       <tr>
         <td style="font-family:monospace;font-size:0.6875rem;color:#64748B;font-weight:600;">${e.id}</td>
-        <td style="font-weight:700;color:#0F172A;">${e.studentName}</td>
+        <td style="font-weight:700;color:#0F172A;">${e.studentName || 'Student'}</td>
         <td style="font-size:0.75rem;white-space:nowrap;">
-          <a href="tel:+91${e.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${e.mobile}</a>
+          <a href="tel:+91${e.mobile || ''}" style="color:#1E3A8A;font-weight:600;">+91 ${e.mobile || '—'}</a>
         </td>
         <td>
           <span class="tag" style="background:#EFF6FF;color:#1E3A8A;font-size:0.625rem;font-weight:600;">
             ${e.courseCategoryId === 'civil-services-ssc' ? 'Civil/SSC' : e.courseCategoryId === 'banking-railway' ? 'Bank/Rly' : 'Foundation'}
           </span>
         </td>
-        <td style="font-size:0.75rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.targetExamination}">
-          ${e.targetExamination}
+        <td style="font-size:0.75rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.targetExamination || ''}">
+          ${e.targetExamination || '—'}
         </td>
-        <td style="font-size:0.6875rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.qualification}">
-          ${e.qualification.split('(')[0].trim()}
+        <td style="font-size:0.6875rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.qualification || ''}">
+          ${e.qualification ? e.qualification.split('(')[0].trim() : '—'}
         </td>
-        <td style="font-size:0.6875rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.preferredBatch}">
-          ${e.preferredBatch.split('(')[0].trim()}
+        <td style="font-size:0.6875rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.preferredBatch || ''}">
+          ${e.preferredBatch ? e.preferredBatch.split('(')[0].trim() : '—'}
         </td>
-        <td style="font-size:0.6875rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.learningMode}">
-          ${e.learningMode.split('(')[0].trim()}
+        <td style="font-size:0.6875rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${e.learningMode || ''}">
+          ${e.learningMode ? e.learningMode.split('(')[0].trim() : '—'}
         </td>
         ${isSuperAdmin ? `<td style="font-size:0.75rem;white-space:nowrap;">${AdminData.getCounsellorName(e.assignedCounsellor)}</td>` : ''}
         <td>${statusBadge(e.status)}</td>
@@ -1448,36 +1896,36 @@
   }
 
   function renderBookingRows(bks) {
-    if (!bks.length) {
+    if (!bks || !bks.length) {
       return `<tr><td colspan="12"><div class="empty-state"><div class="empty-state-title">No counselling bookings match filters</div></div></td></tr>`;
     }
     const isSuperAdmin = SESSION.role === 'super_admin';
     return bks.map(b => `
       <tr>
         <td style="font-family:monospace;font-size:0.6875rem;color:#64748B;font-weight:600;">${b.id}</td>
-        <td style="font-weight:700;color:#0F172A;">${b.studentName}</td>
+        <td style="font-weight:700;color:#0F172A;">${b.studentName || 'Student'}</td>
         <td style="font-size:0.75rem;white-space:nowrap;">
-          <a href="tel:+91${b.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${b.mobile}</a>
+          <a href="tel:+91${b.mobile || ''}" style="color:#1E3A8A;font-weight:600;">+91 ${b.mobile || '—'}</a>
         </td>
-        <td style="font-size:0.6875rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;" title="${b.email}">
-          ${b.email}
+        <td style="font-size:0.6875rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;" title="${b.email || ''}">
+          ${b.email || '—'}
         </td>
         <td>
           <span class="tag" style="background:#EFF6FF;color:#1E3A8A;font-size:0.625rem;font-weight:600;">
             ${b.courseCategoryId === 'civil-services-ssc' ? 'Civil/SSC' : b.courseCategoryId === 'banking-railway' ? 'Bank/Rly' : 'Foundation'}
           </span>
         </td>
-        <td style="font-size:0.75rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${b.targetExamination}">
-          ${b.targetExamination}
+        <td style="font-size:0.75rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${b.targetExamination || ''}">
+          ${b.targetExamination || '—'}
         </td>
         <td style="font-size:0.75rem;white-space:nowrap;font-weight:600;">
           ${formatDate(b.preferredDate)}
         </td>
         <td style="font-size:0.6875rem;white-space:nowrap;">
-          ${b.preferredTime}
+          ${b.preferredTime || '10:00 AM'}
         </td>
-        <td style="font-size:0.6875rem;white-space:nowrap;" title="${b.sessionMedium}">
-          ${b.sessionMedium.split('(')[0].trim()}
+        <td style="font-size:0.6875rem;white-space:nowrap;" title="${b.sessionMedium || ''}">
+          ${b.sessionMedium ? b.sessionMedium.split('(')[0].trim() : '1-on-1 Session'}
         </td>
         ${isSuperAdmin ? `<td style="font-size:0.75rem;white-space:nowrap;">${AdminData.getCounsellorName(b.assignedCounsellor)}</td>` : ''}
         <td>${statusBadge(b.status)}</td>
@@ -1502,9 +1950,41 @@
         </div>`;
     }
 
-    const counsellors = AdminData.counsellors;
+    const allStaff = AdminData.staff || AdminData.counsellors || [];
+    // Strict requirement: Only display genuine counsellor accounts; Super Admin is excluded
+    const counsellors = allStaff.filter(c => c.role === 'admission_counsellor' || c.role === 'academic_counsellor');
+    const unassigned = allStaff.filter(c => !c.role);
 
     return `
+      ${unassigned.length ? `
+        <div style="background:#FFFBEB; border:1px solid #FDE68A; border-left:4px solid #D97706; border-radius:0.5rem; padding:1rem 1.25rem; margin-bottom:1.5rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
+            <div>
+              <div style="font-weight:700; font-size:0.875rem; color:#92400E; display:flex; align-items:center; gap:0.5rem;">
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                ${unassigned.length} Account(s) Awaiting Role Assignment
+              </div>
+              <p style="font-size:0.75rem; color:#B45309; margin-top:0.25rem;">
+                New staff account(s) have been authenticated or registered but do not have an active institutional role assigned yet.
+              </p>
+            </div>
+          </div>
+          <div style="margin-top:0.75rem; display:flex; flex-direction:column; gap:0.5rem;">
+            ${unassigned.map(u => `
+              <div style="display:flex; justify-content:space-between; align-items:center; background:#FFFFFF; border:1px solid #FEF3C7; border-radius:0.375rem; padding:0.625rem 0.875rem; flex-wrap:wrap; gap:0.5rem;">
+                <div>
+                  <span style="font-weight:700; font-size:0.8125rem; color:#0F172A;">${escapeHtml(u.name || 'Staff Member')}</span>
+                  <span style="font-size:0.75rem; color:#64748B; margin-left:0.5rem;">(${escapeHtml(u.email || '—')})</span>
+                </div>
+                <button class="btn btn-xs btn-gold" onclick="window._adminAssignStaffRole('${escapeHtml(u.email)}', '${escapeHtml(u.name || '')}')">
+                  Assign Role &amp; Department
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;">
         <div>
           <h2 style="font-weight:800;font-size:1.125rem;color:#0F172A;">Institute Counsellors & Mentors (${counsellors.length})</h2>
@@ -1516,22 +1996,25 @@
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1.25rem;">
-        ${counsellors.map(c => `
+        ${counsellors.length ? counsellors.map(c => `
           <div class="counsellor-card">
             <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
               <div class="sidebar-user-avatar" style="width:42px;height:42px;font-size:0.875rem;background:${c.status==='active'?'#EFF6FF':'#F1F5F9'};color:${c.status==='active'?'#1E3A8A':'#94A3B8'};border:1px solid ${c.status==='active'?'#DBEAFE':'#E2E8F0'};">
-                ${initials(c.name)}
+                ${initials(c.name || 'Staff')}
               </div>
               <div style="flex:1;min-width:0;">
-                <div style="font-weight:800;font-size:0.9375rem;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name}</div>
-                <div style="font-size:0.6875rem;color:#64748B;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.email}</div>
+                <div style="font-weight:800;font-size:0.9375rem;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name || 'Staff Member'}</div>
+                <div style="font-size:0.6875rem;color:#64748B;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.email || '—'}</div>
               </div>
               ${statusBadge(c.status === 'active' ? 'confirmed' : 'closed')}
             </div>
 
             <div style="display:flex;gap:0.5rem;margin-bottom:0.875rem;flex-wrap:wrap;">
               <span class="tag" style="background:#F5F3FF;color:#7C3AED;font-weight:600;">
-                ${c.department}
+                ${c.department || (c.role === 'academic_counsellor' ? 'Academic Counselling Department' : 'Admission Department')}
+              </span>
+              <span class="tag" style="background:#EFF6FF;color:#1E3A8A;font-weight:600;">
+                ${c.role === 'academic_counsellor' ? 'Academic Counsellor' : 'Admission Counsellor'}
               </span>
               <span class="tag" style="background:#F1F5F9;color:#475569;">
                 Joined ${formatDate(c.joinDate)}
@@ -1541,15 +2024,15 @@
             <!-- Workload Counters -->
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.5rem;padding:0.875rem 0;border-top:1px solid #F1F5F9;border-bottom:1px solid #F1F5F9;margin-bottom:0.875rem;">
               <div style="text-align:center;">
-                <div style="font-weight:800;font-size:1.125rem;color:#1E3A8A;">${c.assignedEnquiries + c.assignedBookings}</div>
+                <div style="font-weight:800;font-size:1.125rem;color:#1E3A8A;">${(c.assignedEnquiries || 0) + (c.assignedBookings || 0)}</div>
                 <div style="font-size:0.625rem;color:#64748B;text-transform:uppercase;font-weight:600;margin-top:0.125rem;">Assigned</div>
               </div>
               <div style="text-align:center;">
-                <div style="font-weight:800;font-size:1.125rem;color:#059669;">${c.completedTasks}</div>
+                <div style="font-weight:800;font-size:1.125rem;color:#059669;">${c.completedTasks || 0}</div>
                 <div style="font-size:0.625rem;color:#64748B;text-transform:uppercase;font-weight:600;margin-top:0.125rem;">Completed</div>
               </div>
               <div style="text-align:center;">
-                <div style="font-weight:800;font-size:1.125rem;color:#D97706;">${c.conversionRate}%</div>
+                <div style="font-weight:800;font-size:1.125rem;color:#D97706;">${c.conversionRate || 0}%</div>
                 <div style="font-size:0.625rem;color:#64748B;text-transform:uppercase;font-weight:600;margin-top:0.125rem;">Conversion</div>
               </div>
             </div>
@@ -1567,7 +2050,7 @@
               </button>
             </div>
           </div>
-        `).join('')}
+        `).join('') : '<div style="grid-column:1/-1;text-align:center;padding:2.5rem;color:#64748B;" class="admin-card">No counsellor records found. Use the button above to add new staff.</div>'}
       </div>`;
   }
 
@@ -1577,15 +2060,13 @@
     const roleData = AdminData.getDataForRole(SESSION.role, SESSION.userId);
     const allFu = isSuperAdmin ? AdminData.getAllFollowUps() : (roleData ? roleData.followUps : []);
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Respect Asia/Kolkata timezone for scheduled date calculations
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
 
-    const todayFu = allFu.filter(f => f.status === 'today' || f.date === todayStr);
-    const upcomingFu = allFu.filter(f => f.status === 'upcoming' && f.date > todayStr);
+    const todayFu = allFu.filter(f => f.status !== 'completed' && (f.status === 'today' || f.date === todayStr));
+    const upcomingFu = allFu.filter(f => f.status !== 'completed' && f.date > todayStr);
     const completedFu = allFu.filter(f => f.status === 'completed');
-    const overdueFu = allFu.filter(f => {
-      if (f.status === 'completed' || f.status === 'today') return false;
-      return f.date < todayStr;
-    });
+    const overdueFu = allFu.filter(f => f.status !== 'completed' && f.date < todayStr && f.status !== 'today');
 
     let displayList = allFu;
     if (ACTIVE_FOLLOWUP_TAB === 'today') displayList = todayFu;
@@ -1784,19 +2265,26 @@
 
   // ─── REPORTS & ANALYTICS ───
   function renderReports() {
-    const a = AdminData.analytics;
-    const maxMonthly = Math.max(...a.monthlyEnquiries.map(m => m.count));
-    const maxBookings = Math.max(...a.monthlyBookings.map(m => m.count));
+    const commLogs = typeof AdminData.getCommunicationLogs === 'function' ? AdminData.getCommunicationLogs() : [];
+    const role = SESSION?.role || 'super_admin';
+    const userId = SESSION?.userId || null;
+    const a = typeof AdminData.calculateAnalytics === 'function'
+      ? AdminData.calculateAnalytics(role, userId)
+      : (AdminData && AdminData.analytics ? AdminData.analytics : {
+          monthlyEnquiries: [],
+          monthlyBookings: [],
+          conversionFunnel: { totalEnquiries: 0, contacted: 0, interested: 0, converted: 0, conversionRate: 0 },
+          courseWiseEnquiries: [],
+          champions: []
+        });
+
+    const maxMonthly = Math.max(1, ...(a.monthlyEnquiries || []).map(m => m.count || 0));
+    const maxBookings = Math.max(1, ...(a.monthlyBookings || []).map(m => m.count || 0));
+    const funnel = a.conversionFunnel || { totalEnquiries: 0, contacted: 0, interested: 0, converted: 0, conversionRate: 0 };
+    const totalEnq = funnel.totalEnquiries || 0;
+    const champions = a.champions || [];
 
     return `
-      <!-- Demo Disclaimer Box -->
-      <div style="padding:0.875rem 1rem;background:#FEF3C7;border:1px solid #FDE68A;border-radius:0.75rem;margin-bottom:1.5rem;font-size:0.75rem;color:#92400E;display:flex;align-items:center;gap:0.625rem;">
-        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <div>
-          <strong>Demonstration Analytics Model:</strong> Charts and funnel metrics below represent realistic sample enrollment activity calibrated for the current academic session.
-        </div>
-      </div>
-
       <!-- Chart Trends -->
       <div class="grid-2 section-gap">
         <div class="admin-card">
@@ -1808,13 +2296,17 @@
           </div>
           <div class="admin-card-body">
             <div class="chart-bar-group">
-              ${a.monthlyEnquiries.map(m => `
-                <div class="chart-bar">
-                  <div class="chart-bar-value">${m.count}</div>
-                  <div class="chart-bar-fill" style="height:${Math.round((m.count/maxMonthly)*140)}px;"></div>
-                  <div class="chart-bar-label">${m.month}</div>
-                </div>
-              `).join('')}
+              ${(a.monthlyEnquiries || []).map(m => {
+                const count = m.count || 0;
+                const barHeight = count > 0 ? Math.max(4, Math.round((count / maxMonthly) * 140)) : 0;
+                return `
+                  <div class="chart-bar">
+                    <div class="chart-bar-value">${count}</div>
+                    <div class="chart-bar-fill" style="height:${barHeight}px;"></div>
+                    <div class="chart-bar-label">${m.month}</div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         </div>
@@ -1828,13 +2320,17 @@
           </div>
           <div class="admin-card-body">
             <div class="chart-bar-group">
-              ${a.monthlyBookings.map(m => `
-                <div class="chart-bar">
-                  <div class="chart-bar-value">${m.count}</div>
-                  <div class="chart-bar-fill gold" style="height:${Math.round((m.count/maxBookings)*140)}px;"></div>
-                  <div class="chart-bar-label">${m.month}</div>
-                </div>
-              `).join('')}
+              ${(a.monthlyBookings || []).map(m => {
+                const count = m.count || 0;
+                const barHeight = count > 0 ? Math.max(4, Math.round((count / maxBookings) * 140)) : 0;
+                return `
+                  <div class="chart-bar">
+                    <div class="chart-bar-value">${count}</div>
+                    <div class="chart-bar-fill gold" style="height:${barHeight}px;"></div>
+                    <div class="chart-bar-label">${m.month}</div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         </div>
@@ -1851,10 +2347,10 @@
           </div>
           <div class="admin-card-body">
             ${[
-              { label: 'Total Enquiries Logged', value: a.conversionFunnel.totalEnquiries, pct: 100, color: '#3B82F6' },
-              { label: 'Contacted by Admission Desk', value: a.conversionFunnel.contacted, pct: Math.round((a.conversionFunnel.contacted/a.conversionFunnel.totalEnquiries)*100), color: '#F59E0B' },
-              { label: 'Interested in Enrollment', value: a.conversionFunnel.interested, pct: Math.round((a.conversionFunnel.interested/a.conversionFunnel.totalEnquiries)*100), color: '#8B5CF6' },
-              { label: 'Successfully Admitted Students', value: a.conversionFunnel.converted, pct: Math.round((a.conversionFunnel.converted/a.conversionFunnel.totalEnquiries)*100), color: '#059669' },
+              { label: 'Total Enquiries Logged', value: funnel.totalEnquiries || 0, pct: totalEnq > 0 ? 100 : 0, color: '#3B82F6' },
+              { label: 'Contacted by Admission Desk', value: funnel.contacted || 0, pct: totalEnq > 0 ? Math.round(((funnel.contacted || 0) / totalEnq) * 100) : 0, color: '#F59E0B' },
+              { label: 'Interested in Enrollment', value: funnel.interested || 0, pct: totalEnq > 0 ? Math.round(((funnel.interested || 0) / totalEnq) * 100) : 0, color: '#8B5CF6' },
+              { label: 'Successfully Admitted Students', value: funnel.converted || 0, pct: totalEnq > 0 ? Math.round(((funnel.converted || 0) / totalEnq) * 100) : 0, color: '#059669' },
             ].map(f => `
               <div style="margin-bottom:1rem;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.375rem;">
@@ -1869,7 +2365,7 @@
 
             <div style="text-align:center;padding-top:1rem;border-top:1px solid #F1F5F9;margin-top:1rem;">
               <div style="font-size:2.25rem;font-weight:800;color:#059669;letter-spacing:-0.03em;">
-                ${a.conversionFunnel.conversionRate}%
+                ${funnel.conversionRate || 0}%
               </div>
               <div style="font-size:0.75rem;color:#64748B;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">
                 Aggregate Lead Conversion Rate
@@ -1886,16 +2382,17 @@
             </div>
           </div>
           <div class="admin-card-body">
-            ${a.courseWiseEnquiries.map(c => {
+            ${(a.courseWiseEnquiries || []).map(c => {
               const colors = { 'Civil Services & SSC': '#1E3A8A', 'Banking & Railway': '#D97706', 'Foundation Program': '#059669' };
+              const pct = c.percentage || 0;
               return `
                 <div style="margin-bottom:1.125rem;">
                   <div style="display:flex;justify-content:space-between;margin-bottom:0.375rem;">
-                    <span style="font-size:0.8125rem;font-weight:700;color:#0F172A;">${c.course}</span>
-                    <span style="font-size:0.8125rem;font-weight:700;">${c.count} leads <span style="font-size:0.6875rem;color:#64748B;font-weight:400;">(${c.percentage}%)</span></span>
+                    <span style="font-size:0.8125rem;font-weight:700;color:#0F172A;">${escapeHtml(c.course)}</span>
+                    <span style="font-size:0.8125rem;font-weight:700;">${c.count || 0} leads <span style="font-size:0.6875rem;color:#64748B;font-weight:400;">(${pct}%)</span></span>
                   </div>
                   <div class="progress-bar">
-                    <div class="progress-bar-fill" style="width:${c.percentage}%;background:${colors[c.course]||'#3B82F6'};"></div>
+                    <div class="progress-bar-fill" style="width:${pct}%;background:${colors[c.course] || '#3B82F6'};"></div>
                   </div>
                 </div>
               `;
@@ -1903,27 +2400,373 @@
 
             <div style="padding-top:1.25rem;border-top:1px solid #F1F5F9;margin-top:1.25rem;">
               <div class="detail-section-title">Department Conversion Champions</div>
-              ${AdminData.counsellors.filter(c=>c.status==='active').slice(0, 3).map(c => `
+              ${champions.length > 0 ? champions.slice(0, 3).map(c => `
                 <div style="display:flex;align-items:center;gap:0.75rem;padding:0.5rem 0;">
                   <div class="sidebar-user-avatar" style="width:32px;height:32px;font-size:0.6875rem;background:#EFF6FF;color:#1E3A8A;border:none;">
                     ${initials(c.name)}
                   </div>
                   <div style="flex:1;">
-                    <div style="font-size:0.8125rem;font-weight:700;color:#0F172A;">${c.name}</div>
-                    <div style="font-size:0.6875rem;color:#64748B;">${c.department}</div>
+                    <div style="font-size:0.8125rem;font-weight:700;color:#0F172A;">${escapeHtml(c.name)}</div>
+                    <div style="font-size:0.6875rem;color:#64748B;">${escapeHtml(c.department)}</div>
                   </div>
                   <div style="font-size:0.8125rem;font-weight:700;color:#059669;">
-                    ${c.conversionRate ? c.conversionRate + '% Conv.' : c.completedTasks + ' Sessions'}
+                    ${escapeHtml(c.scoreLabel || '0 Sessions')}
                   </div>
                 </div>
-              `).join('')}
+              `).join('') : `
+                <div style="font-size:0.8125rem;color:#64748B;padding:0.5rem 0;text-align:center;">
+                  No active counsellor records logged yet.
+                </div>
+              `}
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Automated Communication Audit Log -->
+      <div class="admin-card section-gap">
+        <div class="admin-card-header">
+          <div>
+            <h3 class="admin-card-title">Institute Communication Audit Log</h3>
+            <p style="font-size:0.75rem;color:#64748B;">Official Email dispatches sent under APEX ACADEMY identity</p>
+          </div>
+          <span class="badge" style="background:#EFF6FF;color:#1E40AF;font-size:0.75rem;font-weight:600;">Official Display: APEX ACADEMY</span>
+        </div>
+        <div class="admin-card-body no-padding">
+          <div class="data-table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Channel</th>
+                  <th>Message Type</th>
+                  <th>Recipient</th>
+                  <th>Initiator (Actor)</th>
+                  <th>Delivery Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${commLogs.length ? commLogs.slice(0, 15).map(l => {
+                  const isEmail = l.channel === 'email';
+                  const icon = '✉️ Email';
+                  const typeLabel = (l.message_type || 'Notification').replace(/_/g, ' ').toUpperCase();
+                  let statusBadge = '<span class="badge" style="background:#FEF3C7;color:#B45309;font-size:0.6875rem;">Pending</span>';
+                  if (l.status === 'sent') statusBadge = '<span class="badge" style="background:#DBEAFE;color:#1E40AF;font-size:0.6875rem;">Sent</span>';
+                  else if (l.status === 'delivered') statusBadge = '<span class="badge" style="background:#DCFCE7;color:#166534;font-size:0.6875rem;">Delivered</span>';
+                  else if (l.status === 'read') statusBadge = '<span class="badge" style="background:#E0E7FF;color:#4338CA;font-size:0.6875rem;">Read</span>';
+                  else if (l.status === 'failed') statusBadge = '<span class="badge" style="background:#FEE2E2;color:#991B1B;font-size:0.6875rem;">Failed</span>';
+                  return `
+                    <tr>
+                      <td style="font-size:0.75rem;white-space:nowrap;">${formatDateTime(l.created_at)}</td>
+                      <td><span style="font-weight:600;font-size:0.75rem;">${icon}</span></td>
+                      <td style="font-size:0.75rem;font-weight:600;color:#0F172A;">${escapeHtml(typeLabel)}</td>
+                      <td style="font-size:0.75rem;font-family:monospace;">${escapeHtml(l.recipient || '')}</td>
+                      <td style="font-size:0.75rem;">${escapeHtml(l.actor_name || AdminData.getCounsellorName(l.actor_id) || 'System Engine')}</td>
+                      <td>${statusBadge}</td>
+                    </tr>
+                  `;
+                }).join('') : '<tr><td colspan="6" class="empty-state" style="text-align:center;padding:1.5rem;color:#64748B;">No communication dispatch records found</td></tr>'}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>`;
   }
 
   // ─── TODAY'S SCHEDULE (Academic Counsellor) ───
+  
+  // ─── COUNSELLOR AVAILABILITY RENDERER ───
+  function renderAvailability() {
+    const isSuperAdmin = SESSION.role === "super_admin";
+    const academicCounsellors = (AdminData.counsellors || []).filter(c => 
+      c.department === "Academic Counselling Department" || c.role === "academic_counsellor"
+    );
+
+    let targetCounsellorId = SESSION.userId;
+    let targetCounsellorName = SESSION.name;
+
+    if (isSuperAdmin) {
+      if (!SELECTED_AVAIL_COUNSELLOR_ID && academicCounsellors.length > 0) {
+        SELECTED_AVAIL_COUNSELLOR_ID = academicCounsellors[0].id;
+      }
+      targetCounsellorId = SELECTED_AVAIL_COUNSELLOR_ID;
+      const found = academicCounsellors.find(c => c.id === targetCounsellorId);
+      if (found) targetCounsellorName = found.name;
+    }
+
+    const weeklySchedule = (LOADED_AVAIL_SCHEDULE && LOADED_AVAIL_SCHEDULE.counsellorId === targetCounsellorId)
+      ? LOADED_AVAIL_SCHEDULE.schedule
+      : (typeof AdminData.getCounsellorAvailability === "function" ? AdminData.getCounsellorAvailability(targetCounsellorId) : []);
+
+    const unavailabilities = (LOADED_AVAIL_UNAVAILABILITY && LOADED_AVAIL_UNAVAILABILITY.counsellorId === targetCounsellorId)
+      ? LOADED_AVAIL_UNAVAILABILITY.list
+      : (typeof AdminData.getUnavailability === "function" ? AdminData.getUnavailability(targetCounsellorId) : []);
+
+    const dayLabels = [
+      { dow: 1, name: "Monday" },
+      { dow: 2, name: "Tuesday" },
+      { dow: 3, name: "Wednesday" },
+      { dow: 4, name: "Thursday" },
+      { dow: 5, name: "Friday" },
+      { dow: 6, name: "Saturday" },
+      { dow: 0, name: "Sunday" }
+    ];
+
+    const timeOptions = [
+      "08:00", "08:30", "09:00", "09:30", "10:00", "10:30",
+      "11:00", "11:30", "12:00", "12:30", "13:00", "13:30",
+      "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
+      "17:00", "17:30", "18:00", "18:30", "19:00", "19:30",
+      "20:00", "20:30"
+    ];
+
+    function formatTimeLabel(t) {
+      if (!t) return "";
+      const [hStr, mStr] = t.split(":");
+      let h = parseInt(hStr, 10);
+      const ampm = h >= 12 ? "PM" : "AM";
+      if (h > 12) h -= 12;
+      if (h === 0) h = 12;
+      return `${h}:${mStr || "00"} ${ampm}`;
+    }
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:1.5rem;">
+        <!-- Header & Counsellor Switcher -->
+        <div class="admin-card">
+          <div class="admin-card-header" style="flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center;">
+            <div>
+              <h3 class="admin-card-title">Counsellor Consultation Availability & Calendar Rules</h3>
+              <p style="font-size:0.75rem;color:#64748B;">
+                Configures active working days, operating hours, slot duration, and break windows. Public booking page dynamically fetches real-time available slots.
+              </p>
+            </div>
+            ${isSuperAdmin ? `
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label for="adminCounsellorSelect" style="font-size:0.75rem;font-weight:700;color:#0F172A;white-space:nowrap;">Select Academic Mentor:</label>
+                <select id="adminCounsellorSelect" class="form-select" style="min-width:220px;font-weight:600;">
+                  ${academicCounsellors.map(c => `
+                    <option value="${c.id}" ${c.id === targetCounsellorId ? "selected" : ""}>${c.name} (${c.specialisation || "Academic Mentor"})</option>
+                  `).join("")}
+                </select>
+              </div>
+            ` : `
+              <div style="display:flex;align-items:center;gap:0.5rem;">
+                <span class="tag" style="background:#EFF6FF;color:#1E3A8A;font-weight:700;padding:0.4rem 0.75rem;">
+                  👨‍🏫 Mentor: ${escapeHtml(targetCounsellorName)}
+                </span>
+              </div>
+            `}
+          </div>
+          <div class="admin-card-body" style="background:#F8FAFC;border-top:1px solid #F1F5F9;padding:0.75rem 1.25rem;">
+            <div style="font-size:0.8125rem;color:#334155;display:flex;align-items:center;gap:0.5rem;">
+              <span>⚡</span>
+              <span><strong>Real-Time Sync Active:</strong> Changes saved here immediately update the student booking interface on <a href="../book-counselling.html" target="_blank" style="color:#1E3A8A;text-decoration:underline;font-weight:600;">book-counselling.html</a> without manual intervention.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Weekly Working Schedule Form -->
+        <div class="admin-card">
+          <div class="admin-card-header">
+            <div>
+              <h3 class="admin-card-title">Weekly Schedule & Consultation Hours</h3>
+              <p style="font-size:0.75rem;color:#64748B;">Define standard recurring weekly consultation windows and breaks</p>
+            </div>
+            <button type="button" id="saveWeeklyAvailabilityBtn" class="btn btn-sm btn-gold" style="font-weight:700;">
+              💾 Save Weekly Availability
+            </button>
+          </div>
+          <div class="admin-card-body no-padding">
+            <form id="weeklyScheduleForm">
+              <input type="hidden" id="availTargetCounsellorId" value="${targetCounsellorId}">
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th style="width:130px;">Weekday</th>
+                      <th style="width:120px;">Status</th>
+                      <th>Consultation Window</th>
+                      <th style="width:130px;">Slot Duration</th>
+                      <th>Lunch / Break Window</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${dayLabels.map(d => {
+                      const cfg = (weeklySchedule || []).find(s => s.day_of_week === d.dow) || {
+                        day_of_week: d.dow,
+                        is_available: d.dow !== 0,
+                        start_time: "09:00",
+                        end_time: "18:00",
+                        slot_duration_minutes: 30,
+                        has_break: d.dow !== 0,
+                        break_start: "13:00",
+                        break_end: "14:00"
+                      };
+                      const isAvail = Boolean(cfg.is_available);
+                      const hasBreak = Boolean(cfg.has_break || (cfg.break_start && cfg.break_end));
+                      const startTime = (cfg.start_time || "09:00").slice(0, 5);
+                      const endTime = (cfg.end_time || "18:00").slice(0, 5);
+                      const breakStart = (cfg.break_start || "13:00").slice(0, 5);
+                      const breakEnd = (cfg.break_end || "14:00").slice(0, 5);
+                      const duration = cfg.slot_duration_minutes || 30;
+
+                      return `
+                        <tr class="avail-day-row" data-dow="${d.dow}">
+                          <td style="font-weight:700;color:#0F172A;">
+                            ${d.name}
+                          </td>
+                          <td>
+                            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8125rem;font-weight:600;">
+                              <input type="checkbox" class="day-avail-toggle" data-dow="${d.dow}" ${isAvail ? "checked" : ""}>
+                              <span class="day-avail-label ${isAvail ? "text-emerald-700" : "text-slate-400"}" style="color:${isAvail ? "#059669" : "#94A3B8"};">
+                                ${isAvail ? "Working" : "Day Off"}
+                              </span>
+                            </label>
+                          </td>
+                          <td>
+                            <div class="day-time-controls ${isAvail ? "" : "opacity-40 pointer-events-none"}" style="display:flex;align-items:center;gap:0.5rem;">
+                              <select class="form-select day-start-select" data-dow="${d.dow}" style="width:110px;padding:0.35rem 0.5rem;font-size:0.75rem;">
+                                ${timeOptions.map(t => `<option value="${t}" ${t === startTime ? "selected" : ""}>${formatTimeLabel(t)}</option>`).join("")}
+                              </select>
+                              <span style="font-size:0.75rem;color:#64748B;">to</span>
+                              <select class="form-select day-end-select" data-dow="${d.dow}" style="width:110px;padding:0.35rem 0.5rem;font-size:0.75rem;">
+                                ${timeOptions.map(t => `<option value="${t}" ${t === endTime ? "selected" : ""}>${formatTimeLabel(t)}</option>`).join("")}
+                              </select>
+                            </div>
+                          </td>
+                          <td>
+                            <div class="day-duration-controls ${isAvail ? "" : "opacity-40 pointer-events-none"}">
+                              <select class="form-select day-duration-select" data-dow="${d.dow}" style="width:110px;padding:0.35rem 0.5rem;font-size:0.75rem;">
+                                <option value="15" ${duration === 15 ? "selected" : ""}>15 mins</option>
+                                <option value="30" ${duration === 30 ? "selected" : ""}>30 mins</option>
+                                <option value="45" ${duration === 45 ? "selected" : ""}>45 mins</option>
+                                <option value="60" ${duration === 60 ? "selected" : ""}>60 mins</option>
+                              </select>
+                            </div>
+                          </td>
+                          <td>
+                            <div class="day-break-controls ${isAvail ? "" : "opacity-40 pointer-events-none"}" style="display:flex;align-items:center;gap:0.5rem;">
+                              <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.75rem;color:#475569;margin-right:0.25rem;">
+                                <input type="checkbox" class="day-break-toggle" data-dow="${d.dow}" ${hasBreak ? "checked" : ""}>
+                                Break
+                              </label>
+                              <div class="break-time-inputs ${hasBreak ? "" : "opacity-30 pointer-events-none"}" style="display:flex;align-items:center;gap:0.35rem;">
+                                <select class="form-select day-break-start" data-dow="${d.dow}" style="width:105px;padding:0.35rem 0.5rem;font-size:0.75rem;">
+                                  ${timeOptions.map(t => `<option value="${t}" ${t === breakStart ? "selected" : ""}>${formatTimeLabel(t)}</option>`).join("")}
+                                </select>
+                                <span style="font-size:0.75rem;color:#64748B;">-</span>
+                                <select class="form-select day-break-end" data-dow="${d.dow}" style="width:105px;padding:0.35rem 0.5rem;font-size:0.75rem;">
+                                  ${timeOptions.map(t => `<option value="${t}" ${t === breakEnd ? "selected" : ""}>${formatTimeLabel(t)}</option>`).join("")}
+                                </select>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    }).join("")}
+                  </tbody>
+                </table>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Date-Specific Unavailability & Institute Holidays -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:1.5rem;">
+          <!-- Block Date / Add Leave Form -->
+          <div class="admin-card">
+            <div class="admin-card-header">
+              <div>
+                <h3 class="admin-card-title">Schedule Leave / Block Specific Date</h3>
+                <p style="font-size:0.75rem;color:#64748B;">Blocks all counselling appointments for a specific calendar date</p>
+              </div>
+            </div>
+            <div class="admin-card-body">
+              <form id="addLeaveForm" style="display:flex;flex-direction:column;gap:1rem;">
+                <div>
+                  <label class="form-label" for="leaveDateInput">Calendar Date to Block *</label>
+                  <input type="date" id="leaveDateInput" class="form-input" required min="${new Date().toISOString().split('T')[0]}">
+                </div>
+                <div>
+                  <label class="form-label" for="leaveReasonInput">Reason / Description</label>
+                  <input type="text" id="leaveReasonInput" class="form-input" placeholder="e.g. Personal Leave, Medical, Out of Town" value="Scheduled Leave">
+                </div>
+                ${isSuperAdmin ? `
+                  <div style="padding:0.75rem;background:#FEF3C7;border:1px solid #FDE68A;border-radius:0.5rem;">
+                    <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.75rem;font-weight:700;color:#92400E;cursor:pointer;">
+                      <input type="checkbox" id="instituteWideHolidayCheck">
+                      🏛️ Mark as Institute-Wide Holiday (Closes all counselling desks)
+                    </label>
+                  </div>
+                ` : ""}
+                <button type="submit" class="btn btn-sm btn-primary" style="margin-top:0.5rem;">
+                  📅 Block This Date
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <!-- Existing Blocked Dates List -->
+          <div class="admin-card">
+            <div class="admin-card-header">
+              <div>
+                <h3 class="admin-card-title">Upcoming Blocked Dates & Holidays</h3>
+                <p style="font-size:0.75rem;color:#64748B;">Active date exceptions where bookings are prevented</p>
+              </div>
+            </div>
+            <div class="admin-card-body no-padding">
+              <div class="data-table-wrapper">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Reason / Scope</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="unavailTableBody">
+                    ${unavailabilities.length > 0 ? unavailabilities.map(u => {
+                      const isInstWide = Boolean(u.is_institute_wide || u.counsellorId === null);
+                      return `
+                        <tr>
+                          <td style="font-weight:700;color:#0F172A;white-space:nowrap;">
+                            📅 ${formatDate(u.date)}
+                          </td>
+                          <td style="font-size:0.75rem;">
+                            <div style="font-weight:600;color:#1E293B;">${escapeHtml(u.reason || "Scheduled Leave")}</div>
+                            ${isInstWide 
+                              ? `<span class="tag" style="background:#FEF3C7;color:#92400E;font-size:0.625rem;padding:0.1rem 0.4rem;font-weight:700;">🏛️ Institute-Wide Holiday</span>`
+                              : `<span class="tag" style="background:#F1F5F9;color:#475569;font-size:0.625rem;padding:0.1rem 0.4rem;">👤 Personal Leave</span>`
+                            }
+                          </td>
+                          <td>
+                            <button type="button" class="btn btn-xs btn-outline remove-unavail-btn" data-id="${u.id}" style="color:#DC2626;border-color:#FCA5A5;">
+                              Unblock
+                            </button>
+                          </td>
+                        </tr>
+                      `;
+                    }).join("") : `
+                      <tr>
+                        <td colspan="3">
+                          <div class="empty-state" style="padding:1.5rem 1rem;">
+                            <div class="empty-state-title" style="font-size:0.875rem;">No blocked dates scheduled</div>
+                            <div class="empty-state-text" style="font-size:0.75rem;">Regular weekly hours apply to all upcoming dates.</div>
+                          </div>
+                        </td>
+                      </tr>
+                    `}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderSchedule() {
     const data = AdminData.getDataForRole(SESSION.role, SESSION.userId);
     const bks = data ? data.bookings : [];
@@ -1966,7 +2809,7 @@
                       ${b.targetExamination}
                     </td>
                     <td style="font-size:0.75rem;white-space:nowrap;">
-                      ${b.sessionMedium.split('(')[0].trim()}
+                      ${b.sessionMedium ? b.sessionMedium.split('(')[0].trim() : 'Diagnostic Call'}
                     </td>
                     <td>${statusBadge(b.status)}</td>
                     <td>
@@ -2029,7 +2872,7 @@
                     <td style="font-size:0.75rem;white-space:nowrap;">${formatDate(b.preferredDate)}</td>
                     <td style="font-size:0.75rem;white-space:nowrap;">${b.preferredTime}</td>
                     <td style="font-size:0.75rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${b.targetExamination}</td>
-                    <td style="font-size:0.75rem;">${b.sessionMedium.split('(')[0].trim()}</td>
+                    <td style="font-size:0.75rem;">${b.sessionMedium ? b.sessionMedium.split('(')[0].trim() : 'Diagnostic Call'}</td>
                     <td>${statusBadge(b.status)}</td>
                     <td>
                       <button class="btn btn-xs btn-outline view-booking-btn" data-id="${b.id}">
@@ -2130,13 +2973,16 @@
     const isSuperAdmin = SESSION.role === 'super_admin';
     const isAssignedCounsellor = SESSION.role === 'admission_counsellor';
     const counsellors = AdminData.counsellors.filter(c => c.department === 'Admission Department' && c.status === 'active');
+    const commLogs = typeof AdminData.getStudentCommunicationLogs === 'function'
+      ? AdminData.getStudentCommunicationLogs(e.studentId, e.mobile, e.email)
+      : [];
 
     const bodyHtml = `
       <!-- Student Profile -->
       <div class="detail-section">
         <div class="detail-section-title">Aspirant Profile</div>
         <div class="detail-row"><span class="detail-row-label">Student Name</span><span class="detail-row-value" style="font-weight:700;">${e.studentName}</span></div>
-        <div class="detail-row"><span class="detail-row-label">Mobile Number</span><span class="detail-row-value"><a href="tel:+91${e.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${e.mobile}</a> <a href="https://wa.me/91${String(e.mobile).replace(/\\D/g,'')}?text=${encodeURIComponent('Hello ' + e.studentName + ', greetings from Apex Academy Admissions Desk.')}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline" style="margin-left:8px;padding:2px 8px;font-size:0.75rem;color:#16A34A;border-color:#16A34A;">WhatsApp</a></span></div>
+        <div class="detail-row"><span class="detail-row-label">Mobile Number</span><span class="detail-row-value"><a href="tel:+91${e.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${e.mobile}</a></span></div>
         <div class="detail-row"><span class="detail-row-label">Email Address</span><span class="detail-row-value">${e.email}</span></div>
         <div class="detail-row"><span class="detail-row-label">Educational Qualification</span><span class="detail-row-value">${e.qualification}</span></div>
       </div>
@@ -2189,6 +3035,44 @@
         </div>
       </div>
 
+      <!-- Communication History -->
+      <div class="detail-section">
+        <div class="detail-section-title">Communication History (${commLogs.length})</div>
+        ${commLogs.length ? `
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${commLogs.map(l => {
+              const isEmail = l.channel === 'email';
+              const icon = isEmail ? '✉️' : '💬';
+              const channelBadge = '<span class="badge" style="background:#EFF6FF;color:#1D4ED8;font-size:0.6875rem;">Email</span>';
+              let statusBadge = '<span class="badge" style="background:#FEF3C7;color:#B45309;font-size:0.6875rem;">Pending</span>';
+              if (l.status === 'sent') statusBadge = '<span class="badge" style="background:#DBEAFE;color:#1E40AF;font-size:0.6875rem;">Sent</span>';
+              else if (l.status === 'delivered') statusBadge = '<span class="badge" style="background:#DCFCE7;color:#166534;font-size:0.6875rem;">Delivered</span>';
+              else if (l.status === 'read') statusBadge = '<span class="badge" style="background:#E0E7FF;color:#4338CA;font-size:0.6875rem;">Read</span>';
+              else if (l.status === 'failed') statusBadge = '<span class="badge" style="background:#FEE2E2;color:#991B1B;font-size:0.6875rem;">Failed</span>';
+              
+              const typeName = (l.message_type || 'Notification').replace(/_/g, ' ').toUpperCase();
+              return `
+                <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:8px 10px;font-size:0.75rem;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                    <div style="display:flex;align-items:center;gap:6px;font-weight:600;color:#0F172A;">
+                      <span>${icon}</span>
+                      <span>${typeName}</span>
+                      ${channelBadge}
+                    </div>
+                    <div>${statusBadge}</div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;color:#64748B;font-size:0.6875rem;">
+                    <span>To: ${escapeHtml(l.recipient || '')}</span>
+                    <span>${formatDateTime(l.created_at)}</span>
+                  </div>
+                  ${l.error_details ? `<div style="color:#DC2626;margin-top:4px;font-size:0.6875rem;">Error: ${escapeHtml(l.error_details)}</div>` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : '<div style="font-size:0.8125rem;color:#94A3B8;">No automated communications logged yet for this aspirant.</div>'}
+      </div>
+
       <!-- Action Panel (Super Admin OR Assigned Counsellor) -->
       ${(isSuperAdmin || isAssignedCounsellor) ? `
         <div class="detail-section" style="background:#F8FAFC;padding:1rem;border-radius:0.75rem;border:1px solid #E2E8F0;">
@@ -2207,11 +3091,12 @@
           <div class="form-group">
             <label class="form-label" for="drawerChangeEnqStatus">Update Enquiry Status</label>
             <select class="form-select" id="drawerChangeEnqStatus">
-              <option value="new" ${e.status==='new'?'selected':''}>New</option>
-              <option value="contacted" ${e.status==='contacted'?'selected':''}>Contacted</option>
-              <option value="interested" ${e.status==='interested'?'selected':''}>Interested</option>
-              <option value="converted" ${e.status==='converted'?'selected':''}>Converted</option>
-              <option value="closed" ${e.status==='closed'?'selected':''}>Closed</option>
+              <option value="New" ${(e.status||'').toLowerCase()==='new'?'selected':''}>New Lead</option>
+              <option value="Contacted" ${(e.status||'').toLowerCase()==='contacted'?'selected':''}>Contacted</option>
+              <option value="Interested" ${(e.status||'').toLowerCase()==='interested'?'selected':''}>Interested</option>
+              <option value="Pending Follow-up" ${(e.status||'').toLowerCase().includes('follow')?'selected':''}>Pending Follow-up</option>
+              <option value="Converted" ${(e.status||'').toLowerCase()==='converted'?'selected':''}>Converted (Admitted)</option>
+              <option value="Not Interested" ${(e.status||'').toLowerCase().includes('not') || (e.status||'').toLowerCase()==='closed'?'selected':''}>Not Interested (Closed)</option>
             </select>
           </div>
 
@@ -2221,8 +3106,8 @@
             <input type="text" class="form-input" id="drawerEnqFuPurpose" placeholder="Follow-up objective (e.g. Discuss fee waiver, syllabus kit)" style="margin-top:0.375rem;">
           </div>
 
-          <button class="btn btn-sm btn-gold" style="width:100%;margin-top:0.5rem;" onclick="window._adminSaveEnqDrawer('${e.id}')">
-            Save Changes (Demo Persistence)
+          <button id="btnSaveEnqDrawer" class="btn btn-sm btn-gold" style="width:100%;margin-top:0.5rem;" onclick="window._adminSaveEnqDrawer('${e.id}')">
+            Save Changes
           </button>
         </div>
       ` : ''}`;
@@ -2236,13 +3121,16 @@
     const isSuperAdmin = SESSION.role === 'super_admin';
     const isAssignedCounsellor = SESSION.role === 'academic_counsellor';
     const counsellors = AdminData.counsellors.filter(c => c.department === 'Academic Counselling Department' && c.status === 'active');
+    const commLogs = typeof AdminData.getStudentCommunicationLogs === 'function'
+      ? AdminData.getStudentCommunicationLogs(b.studentId, b.phone, b.email)
+      : [];
 
     const bodyHtml = `
       <!-- Aspirant Profile -->
       <div class="detail-section">
         <div class="detail-section-title">Aspirant Profile</div>
         <div class="detail-row"><span class="detail-row-label">Student Name</span><span class="detail-row-value" style="font-weight:700;">${b.studentName}</span></div>
-        <div class="detail-row"><span class="detail-row-label">Mobile Number</span><span class="detail-row-value"><a href="tel:+91${b.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${b.mobile}</a> <a href="https://wa.me/91${String(b.mobile).replace(/\\D/g,'')}?text=${encodeURIComponent('Hello ' + b.studentName + ', regarding your 1-on-1 strategy call with Apex Academy on ' + formatDate(b.preferredDate) + '.')}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline" style="margin-left:8px;padding:2px 8px;font-size:0.75rem;color:#16A34A;border-color:#16A34A;">WhatsApp</a></span></div>
+        <div class="detail-row"><span class="detail-row-label">Mobile Number</span><span class="detail-row-value"><a href="tel:+91${b.mobile}" style="color:#1E3A8A;font-weight:600;">+91 ${b.mobile}</a></span></div>
         <div class="detail-row"><span class="detail-row-label">Email Address</span><span class="detail-row-value">${b.email}</span></div>
       </div>
 
@@ -2254,6 +3142,41 @@
         <div class="detail-row"><span class="detail-row-label">Scheduled Date</span><span class="detail-row-value" style="font-weight:700;">${formatDate(b.preferredDate)}</span></div>
         <div class="detail-row"><span class="detail-row-label">Time Window</span><span class="detail-row-value" style="color:#D97706;font-weight:700;">${b.preferredTime}</span></div>
         <div class="detail-row"><span class="detail-row-label">Session Medium</span><span class="detail-row-value">${b.sessionMedium}</span></div>
+      </div>
+
+      <!-- Google Meet Video Conference -->
+      <div class="detail-section" style="background:#EFF6FF;padding:0.875rem;border-radius:0.75rem;border:1px solid #BFDBFE;">
+        <div class="detail-section-title" style="color:#1E3A8A;margin-bottom:0.5rem;display:flex;align-items:center;justify-content:space-between;">
+          <span>Google Meet Video Link</span>
+          <span style="font-size:0.6875rem;color:#2563EB;font-weight:600;">Super Admin Only</span>
+        </div>
+        ${isSuperAdmin ? `
+          <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+            <input type="url" id="drawerMeetLinkInput" class="form-input" style="font-size:0.8125rem;padding:0.375rem 0.625rem;background:#fff;" placeholder="https://meet.google.com/xxx-yyyy-zzz" value="${b.googleMeetLink || ''}">
+            <button class="btn btn-xs btn-primary" onclick="window._adminSaveMeetLink('${b.id}')">Save</button>
+          </div>
+          <div style="display:flex;gap:0.375rem;flex-wrap:wrap;">
+            <button class="btn btn-xs btn-outline" onclick="window._adminGenerateMeetLink('${b.id}')">Configure / Prompt Link</button>
+            ${b.googleMeetLink ? `
+              <button class="btn btn-xs btn-outline" onclick="window._adminCopyMeetLink('${b.id}')">Copy Link</button>
+              <a href="${b.googleMeetLink}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-success" style="display:inline-flex;align-items:center;gap:4px;">🎥 Join Call</a>
+            ` : ''}
+          </div>
+        ` : `
+          ${b.googleMeetLink ? `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
+              <span style="font-size:0.8125rem;font-family:monospace;color:#1E3A8A;word-break:break-all;">${b.googleMeetLink}</span>
+              <div style="display:flex;gap:0.375rem;flex-shrink:0;">
+                <button class="btn btn-xs btn-outline" onclick="navigator.clipboard.writeText('${b.googleMeetLink}').then(() => showToast('Copied', 'Meet link copied.', 'info'))">Copy</button>
+                <a href="${b.googleMeetLink}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-success">🎥 Join Call</a>
+              </div>
+            </div>
+          ` : `
+            <div style="font-size:0.8125rem;color:#64748B;font-style:italic;">
+              Video link not yet configured. Contact Super Admin to generate Google Meet link.
+            </div>
+          `}
+        `}
       </div>
 
       <!-- Booking Governance -->
@@ -2308,6 +3231,43 @@
             ${ICONS.plus} Add Private Note
           </button>
         </div>
+      </div>
+
+      <!-- Communication History -->
+      <div class="detail-section">
+        <div class="detail-section-title">Communication History (${commLogs.length})</div>
+        ${commLogs.length ? `
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${commLogs.map(l => {
+              const isEmail = l.channel === 'email';
+              const icon = isEmail ? '✉️' : '💬';
+              const channelBadge = '<span class="badge" style="background:#EFF6FF;color:#1D4ED8;font-size:0.6875rem;">Email</span>';
+              let statusBadge = '<span class="badge" style="background:#FEF3C7;color:#B45309;font-size:0.6875rem;">Pending</span>';
+              if (l.status === 'sent') statusBadge = '<span class="badge" style="background:#DBEAFE;color:#1E40AF;font-size:0.6875rem;">Sent</span>';
+              else if (l.status === 'delivered') statusBadge = '<span class="badge" style="background:#DCFCE7;color:#166534;font-size:0.6875rem;">Delivered</span>';
+              else if (l.status === 'read') statusBadge = '<span class="badge" style="background:#E0E7FF;color:#4338CA;font-size:0.6875rem;">Read</span>';
+              else if (l.status === 'failed') statusBadge = '<span class="badge" style="background:#FEE2E2;color:#991B1B;font-size:0.6875rem;">Failed</span>';
+              
+              const typeName = (l.message_type || 'Notification').replace(/_/g, ' ').toUpperCase();
+              return `
+                <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:8px 10px;font-size:0.75rem;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                    <div style="display:flex;align-items:center;gap:6px;font-weight:600;color:#0F172A;">
+                      <span>${icon}</span>
+                      <span>${typeName}</span>
+                      ${channelBadge}
+                    </div>
+                    <div>${statusBadge}</div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;color:#64748B;font-size:0.6875rem;">
+                    <span>To: ${escapeHtml(l.recipient || '')}</span>
+                    <span>${formatDateTime(l.created_at)}</span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : '<div style="font-size:0.8125rem;color:#94A3B8;">No automated communications logged yet for this booking session.</div>'}
       </div>
 
       <!-- Mentor Assignment (Super Admin) & Follow-up -->
@@ -2384,74 +3344,130 @@
   };
 
   window._adminSaveEnqDrawer = async function(id) {
-    const counsellorVal = document.getElementById('drawerAssignEnqCounsellor')?.value;
+    const counsellorSelect = document.getElementById('drawerAssignEnqCounsellor');
+    const counsellorVal = counsellorSelect ? counsellorSelect.value : undefined;
     const statusVal = document.getElementById('drawerChangeEnqStatus')?.value;
     const fuDate = document.getElementById('drawerEnqFuDate')?.value;
     const fuPurpose = document.getElementById('drawerEnqFuPurpose')?.value;
 
-    const updates = {};
-    if (statusVal) updates.status = statusVal;
-    if (counsellorVal !== undefined) updates.assignedCounsellor = counsellorVal || null;
-
-    // Call Supabase Lead Reassignment RPC if live
-    if (window.ApexSupabase && window.ApexSupabase.isLive() && counsellorVal !== undefined) {
-      try {
-        await window.ApexSupabase.reassignAdmissionEnquiry(id, counsellorVal || null);
-      } catch (rpcErr) {
-        console.warn('Supabase reassign lead error:', rpcErr);
-      }
+    const saveBtn = document.getElementById('btnSaveEnqDrawer');
+    const originalText = saveBtn ? saveBtn.innerHTML : 'Save Changes';
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<span class="spinner" style="display:inline-block;width:12px;height:12px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin 0.6s linear infinite;margin-right:6px;vertical-align:middle;"></span>Saving...';
     }
 
-    // If Supabase is live and status changed, call update_enquiry_status RPC
-    if (window.ApexSupabase && window.ApexSupabase.isLive() && statusVal) {
+    let savedStatus = statusVal;
+    let savedFollowUpId = null;
+
+    if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+      const c = window.ApexSupabase.getClient();
+      let unifiedSuccess = false;
+
+      // 1. Try unified atomic RPC if available
       try {
-        const c = window.ApexSupabase.getClient();
-        const { data: statusRes, error: statusErr } = await c.rpc('update_enquiry_status', {
+        const { data: unifiedRes, error: unifiedErr } = await c.rpc('save_enquiry_lead_drawer', {
           p_enquiry_id: id,
-          p_new_status: statusVal
+          p_status: statusVal || null,
+          p_counsellor_id: (counsellorVal !== undefined && counsellorVal !== '') ? counsellorVal : null,
+          p_follow_up_date: fuDate ? fuDate : null,
+          p_follow_up_notes: (fuPurpose || '').trim() || (fuDate ? 'Telephonic Follow-up Consultation' : null)
         });
-        if (statusErr) throw statusErr;
-        if (statusRes && statusRes.success === false) {
-          showToast('Status Error', statusRes.message || 'Could not update enquiry status.', 'error');
-          return;
-        }
-      } catch (err) {
-        console.warn('update_enquiry_status RPC error:', err);
-        showToast('Database Error', 'Could not update status: ' + (err.message || 'Unknown error'), 'error');
-        return;
-      }
-    } else {
-      // Demo mode fallback
-      AdminData.updateEnquiry(id, updates, SESSION.name);
-    }
 
-    // Follow-up scheduling via Supabase RPC if live
-    if (fuDate && fuPurpose) {
-      if (window.ApexSupabase && window.ApexSupabase.isLive()) {
-        try {
-          const c = window.ApexSupabase.getClient();
-          // Get student_id from cached data or AdminData
-          const enqData = AdminData.enquiries ? AdminData.enquiries.find(e => e.id === id) : null;
-          if (enqData && enqData.studentId) {
-            await c.rpc('create_follow_up', {
-              p_student_id: enqData.studentId,
+        if (!unifiedErr && unifiedRes && unifiedRes.success) {
+          unifiedSuccess = true;
+          if (unifiedRes.status) savedStatus = unifiedRes.status;
+          if (unifiedRes.follow_up_id) savedFollowUpId = unifiedRes.follow_up_id;
+        }
+      } catch (uErr) {
+        console.warn('save_enquiry_lead_drawer RPC not yet available, falling back to individual calls:', uErr);
+      }
+
+      if (!unifiedSuccess) {
+        // Step A: Reassignment if Super Admin
+        if (counsellorVal !== undefined) {
+          try {
+            await window.ApexSupabase.reassignAdmissionEnquiry(id, counsellorVal || null);
+          } catch (rpcErr) {
+            console.warn('Supabase reassign lead error:', rpcErr);
+          }
+        }
+
+        // Step B: Update enquiry status
+        if (statusVal) {
+          try {
+            const { data: statusRes, error: statusErr } = await c.rpc('update_enquiry_status', {
+              p_enquiry_id: id,
+              p_new_status: statusVal
+            });
+            if (statusErr) throw statusErr;
+            if (statusRes && statusRes.success === false) {
+              throw new Error(statusRes.message || 'Could not update enquiry status.');
+            }
+            if (statusRes && statusRes.status) savedStatus = statusRes.status;
+          } catch (err) {
+            console.error('update_enquiry_status RPC error:', err);
+            showToast('Database Error', 'Could not update status: ' + (err.message || 'Unknown error'), 'error');
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = originalText; }
+            return;
+          }
+        }
+
+        // Step C: Schedule follow-up task if date provided
+        if (fuDate) {
+          const cleanPurpose = (fuPurpose || '').trim() || 'Telephonic Follow-up Consultation';
+          try {
+            const enqData = AdminData.enquiries ? AdminData.enquiries.find(e => e.id === id) : null;
+            const { data: fuRes, error: fuErr } = await c.rpc('create_follow_up', {
+              p_student_id: enqData?.studentId || null,
               p_enquiry_id: id,
               p_booking_id: null,
               p_follow_up_date: fuDate,
               p_follow_up_time: null,
-              p_follow_up_type: fuPurpose || 'phone_call',
-              p_notes: fuPurpose
+              p_follow_up_type: 'Telephonic Consultation',
+              p_notes: cleanPurpose
             });
+            if (fuErr) throw fuErr;
+            if (fuRes && fuRes.success === false) {
+              throw new Error(fuRes.message || 'Could not schedule follow-up.');
+            }
+            if (fuRes && fuRes.follow_up_id) savedFollowUpId = fuRes.follow_up_id;
+          } catch (err) {
+            console.error('create_follow_up RPC error:', err);
+            showToast('Database Error', 'Could not schedule follow-up: ' + (err.message || 'Unknown error'), 'error');
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = originalText; }
+            return;
           }
-        } catch (err) {
-          console.warn('create_follow_up RPC error:', err);
         }
-      } else {
-        AdminData.scheduleEnquiryFollowUp(id, { date: fuDate, purpose: fuPurpose });
       }
     }
 
-    showToast('Lead Updated', 'Changes saved successfully.', 'success');
+    // Update frontend state & cache
+    const updates = {};
+    if (statusVal) updates.status = savedStatus || statusVal;
+    if (counsellorVal !== undefined) updates.assignedCounsellor = counsellorVal || null;
+    AdminData.updateEnquiry(id, updates, SESSION.name);
+
+    if (fuDate) {
+      const cleanPurpose = (fuPurpose || '').trim() || 'Telephonic Follow-up Consultation';
+      AdminData.scheduleEnquiryFollowUp(id, {
+        id: savedFollowUpId || ('fu_' + Date.now()),
+        date: fuDate,
+        purpose: cleanPurpose,
+        counsellorId: (counsellorVal !== undefined && counsellorVal !== '') ? counsellorVal : SESSION.userId
+      });
+    }
+
+    let toastMsg = 'Lead changes saved successfully.';
+    if (statusVal && fuDate) {
+      toastMsg = 'Status updated to "' + (savedStatus || statusVal) + '" and follow-up scheduled for ' + formatDate(fuDate) + '.';
+    } else if (statusVal) {
+      toastMsg = 'Enquiry status changed to "' + (savedStatus || statusVal) + '".';
+    } else if (fuDate) {
+      toastMsg = 'Follow-up scheduled for ' + formatDate(fuDate) + '.';
+    }
+
+    showToast('Lead Updated', toastMsg, 'success');
     closeDrawer();
     renderPage();
     buildSidebar();
@@ -2596,12 +3612,12 @@
         <div class="form-group">
           <label class="form-label">Select Time Window *</label>
           <select class="form-select" id="rescheduleSlot">
-            <option value="10:30 AM – 11:00 AM">10:30 AM – 11:00 AM</option>
-            <option value="12:00 PM – 12:30 PM">12:00 PM – 12:30 PM</option>
-            <option value="03:00 PM – 03:30 PM">03:00 PM – 03:30 PM</option>
-            <option value="05:00 PM – 05:30 PM">05:00 PM – 05:30 PM</option>
-            <option value="06:30 PM – 07:00 PM">06:30 PM – 07:00 PM</option>
-            <option value="07:30 PM – 08:00 PM">07:30 PM – 08:00 PM</option>
+            <option value="10:30 AM - 11:00 AM">10:30 AM - 11:00 AM</option>
+            <option value="12:00 PM - 12:30 PM">12:00 PM - 12:30 PM</option>
+            <option value="03:00 PM - 03:30 PM">03:00 PM - 03:30 PM</option>
+            <option value="05:00 PM - 05:30 PM">05:00 PM - 05:30 PM</option>
+            <option value="06:30 PM - 07:00 PM">06:30 PM - 07:00 PM</option>
+            <option value="07:30 PM - 08:00 PM">07:30 PM - 08:00 PM</option>
           </select>
         </div>
 
@@ -2678,8 +3694,40 @@
       AdminData.updateBooking(id, { assignedCounsellor: counsellorVal || null }, SESSION.name);
     }
 
-    if (fuDate && fuPurpose) {
-      AdminData.scheduleBookingFollowUp(id, { date: fuDate, purpose: fuPurpose });
+    if (fuDate) {
+      const cleanPurpose = (fuPurpose || '').trim() || 'Academic Strategy Review';
+      let savedFollowUpId = null;
+      if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+        try {
+          const c = window.ApexSupabase.getClient();
+          const bkData = AdminData.bookings ? AdminData.bookings.find(b => b.id === id) : null;
+          const { data: fuRes, error: fuErr } = await c.rpc('create_follow_up', {
+            p_student_id: bkData?.studentId || null,
+            p_enquiry_id: null,
+            p_booking_id: id,
+            p_follow_up_date: fuDate,
+            p_follow_up_time: null,
+            p_follow_up_type: 'Strategy Consultation',
+            p_notes: cleanPurpose
+          });
+          if (fuErr) throw fuErr;
+          if (fuRes && fuRes.success === false) {
+            showToast('Follow-up Error', fuRes.message || 'Could not schedule follow-up.', 'error');
+            return;
+          }
+          if (fuRes && fuRes.follow_up_id) savedFollowUpId = fuRes.follow_up_id;
+        } catch (err) {
+          console.warn('create_follow_up RPC error for booking:', err);
+          showToast('Database Error', 'Could not schedule follow-up: ' + (err.message || 'Unknown error'), 'error');
+          return;
+        }
+      }
+      AdminData.scheduleBookingFollowUp(id, {
+        id: savedFollowUpId || ('fu_' + Date.now()),
+        date: fuDate,
+        purpose: cleanPurpose,
+        counsellorId: (counsellorVal !== undefined && counsellorVal !== '') ? counsellorVal : SESSION.userId
+      });
     }
 
     showToast('Booking Updated', 'Assignment and follow-up saved.', 'success');
@@ -2782,28 +3830,87 @@
       </div>`);
   };
 
-  window._adminSaveCounsellor = function(id) {
-    const name = document.getElementById('editCounName')?.value;
-    const email = document.getElementById('editCounEmail')?.value;
-    const phone = document.getElementById('editCounPhone')?.value;
+  window._adminSaveCounsellor = async function(id) {
+    const name = document.getElementById('editCounName')?.value?.trim();
+    const email = document.getElementById('editCounEmail')?.value?.trim();
+    const phone = document.getElementById('editCounPhone')?.value?.trim();
     const department = document.getElementById('editCounDept')?.value;
+    const role = department === 'Academic Counselling Department' ? 'academic_counsellor' : 'admission_counsellor';
 
-    AdminData.updateCounsellor(id, { name, email, phone, department });
+    if (!name) {
+      showToast('Validation Error', 'Full Name is required.', 'error');
+      return;
+    }
+
+    if (useSupabaseData()) {
+      try {
+        const client = window.ApexSupabase.getClient();
+        const { error } = await client
+          .from('profiles')
+          .update({
+            full_name: name,
+            phone: phone || null,
+            department: department,
+            role: role,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+
+        if (error) {
+          showToast('Update Failed', error.message || 'Failed to update counsellor profile.', 'error');
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to update counsellor profile in Supabase:', err);
+        showToast('Update Failed', 'Database error updating staff profile.', 'error');
+        return;
+      }
+    }
+
+    AdminData.updateCounsellor(id, { name, email, phone, department, role });
     closeModal();
     showToast('Counsellor Updated', 'Staff details saved successfully.', 'success');
+    if (useSupabaseData()) {
+      await syncFromSupabase();
+    }
     renderPage();
   };
 
   window._adminToggleCounsellor = function(id) {
-    const c = AdminData.counsellors.find(co => co.id === id);
+    const c = (AdminData.staff || AdminData.counsellors || []).find(co => co.id === id);
     if (!c) return;
     const isDeactivating = c.status === 'active';
     confirmAction(
       `${isDeactivating ? 'Deactivate' : 'Activate'} Counsellor Account?`,
       `Are you sure you want to ${isDeactivating ? 'deactivate' : 'activate'} ${c.name}'s account?`,
-      () => {
+      async () => {
+        if (useSupabaseData()) {
+          try {
+            const client = window.ApexSupabase.getClient();
+            const { error } = await client
+              .from('profiles')
+              .update({
+                is_active: !isDeactivating,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', id);
+
+            if (error) {
+              showToast('Action Failed', error.message || 'Failed to update account status.', 'error');
+              return;
+            }
+          } catch (err) {
+            console.error('Failed to update account status in Supabase:', err);
+            showToast('Action Failed', 'Database error updating account status.', 'error');
+            return;
+          }
+        }
+
         const newStatus = AdminData.toggleCounsellorStatus(id);
         showToast('Status Changed', `${c.name}'s profile is now ${newStatus}.`, 'info');
+        if (useSupabaseData()) {
+          await syncFromSupabase();
+        }
         renderPage();
         buildSidebar();
       },
@@ -2811,34 +3918,123 @@
     );
   };
 
+  // ─── Counsellor Role Assignment & Provisioning Handlers ───
+  window._adminAssignStaffRole = function(email, currentName) {
+    openModal(`
+      <div class="modal-header">
+        <h3 class="modal-title">Assign Institutional Role</h3>
+        <button class="modal-close" onclick="window._adminCloseModal()">${ICONS.close}</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:0.8125rem;color:#475569;margin-bottom:1rem;">
+          Assign an official role and workspace permissions for <strong>${escapeHtml(currentName || email)}</strong> (${escapeHtml(email)}).
+        </p>
+        <div class="form-group">
+          <label class="form-label">Select Staff Role *</label>
+          <select class="form-select" id="assignRoleSelect">
+            <option value="super_admin">Super Admin (Full Governance &amp; Executive Oversight)</option>
+            <option value="admission_counsellor">Admission Counsellor (Lead &amp; Enquiry Management)</option>
+            <option value="academic_counsellor">Academic Counsellor (1-on-1 Student Guidance &amp; Bookings)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Assigned Department</label>
+          <select class="form-select" id="assignDeptSelect">
+            <option value="Executive Administration">Executive Administration</option>
+            <option value="Admission Department">Admission Department</option>
+            <option value="Academic Counselling Department">Academic Counselling Department</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="window._adminCloseModal()">Cancel</button>
+        <button class="btn btn-gold" id="saveRoleAssignmentBtn">Confirm &amp; Assign Role</button>
+      </div>
+    `);
+
+    const roleSel = document.getElementById('assignRoleSelect');
+    const deptSel = document.getElementById('assignDeptSelect');
+    if (roleSel && deptSel) {
+      roleSel.addEventListener('change', () => {
+        if (roleSel.value === 'super_admin') {
+          deptSel.value = 'Executive Administration';
+        } else if (roleSel.value === 'academic_counsellor') {
+          deptSel.value = 'Academic Counselling Department';
+        } else {
+          deptSel.value = 'Admission Department';
+        }
+      });
+    }
+
+    const saveBtn = document.getElementById('saveRoleAssignmentBtn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const role = roleSel.value;
+        const dept = deptSel.value;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Assigning Role...';
+
+        if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+          try {
+            const client = window.ApexSupabase.getClient();
+            const { data, error } = await client.rpc('assign_admin_role', {
+              p_email: email,
+              p_role: role,
+              p_department: dept
+            });
+            if (error) {
+              showToast('Assignment Error', error.message || 'Failed to assign role in Supabase.', 'error');
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Confirm & Assign Role';
+              return;
+            }
+          } catch (e) {
+            console.error('Error invoking assign_admin_role:', e);
+          }
+        }
+
+        closeModal();
+        showToast('Role Assigned', `Role successfully assigned to ${email}.`, 'success');
+        if (useSupabaseData()) {
+          await syncFromSupabase();
+        }
+        renderPage();
+      });
+    }
+  };
+
   function showAddCounsellorModal() {
     openModal(`
       <div class="modal-header">
-        <h3 class="modal-title">Add New Counsellor Profile</h3>
+        <h3 class="modal-title">Provision New Counsellor Account</h3>
         <button class="modal-close" onclick="window._adminCloseModal()">${ICONS.close}</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Full Name *</label>
-          <input class="form-input" id="newCounName" placeholder="e.g. Ananya Sen">
+          <input class="form-input" id="newCounName" placeholder="e.g. Rahul Sharma">
         </div>
         <div class="form-group">
           <label class="form-label">Institutional Email *</label>
-          <input class="form-input" id="newCounEmail" placeholder="ananya.counsellor@apexacademy.edu.in" type="email">
+          <input class="form-input" id="newCounEmail" placeholder="rahul.counsellor@apexacademy.edu.in" type="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Initial Password *</label>
+          <input class="form-input" id="newCounPass" type="password" value="ApexStaff@2026" placeholder="Min 6 characters">
         </div>
         <div class="form-group">
           <label class="form-label">Contact Phone</label>
           <input class="form-input" id="newCounPhone" placeholder="98765432XX">
         </div>
         <div class="form-group">
-          <label class="form-label">Assigned Department *</label>
-          <select class="form-select" id="newCounDept">
-            <option value="Admission Department">Admission Department</option>
-            <option value="Academic Counselling Department">Academic Counselling Department</option>
+          <label class="form-label">Assigned Role &amp; Department *</label>
+          <select class="form-select" id="newCounRole">
+            <option value="admission_counsellor|Admission Department" selected>Admission Counsellor — Admission Department</option>
+            <option value="academic_counsellor|Academic Counselling Department">Academic Counsellor — Academic Counselling Department</option>
           </select>
         </div>
         <p style="font-size:0.6875rem;color:#94A3B8;margin-top:0.5rem;">
-          Mock authentication automatically activates this account for testing in demo storage.
+          Creates an active staff account with secure authentication, profile synchronization, and automatic scheduling.
         </p>
       </div>
       <div class="modal-footer">
@@ -2852,8 +4048,10 @@
       btn.addEventListener('click', async () => {
         const name = document.getElementById('newCounName')?.value?.trim();
         const email = document.getElementById('newCounEmail')?.value?.trim();
+        const password = document.getElementById('newCounPass')?.value?.trim() || 'ApexStaff@2026';
         const phone = document.getElementById('newCounPhone')?.value?.trim();
-        const department = document.getElementById('newCounDept')?.value;
+        const roleDept = document.getElementById('newCounRole')?.value || 'admission_counsellor|Admission Department';
+        const [role, department] = roleDept.split('|');
 
         if (!name || !email) {
           showToast('Validation Error', 'Full Name and Email are required.', 'error');
@@ -2863,45 +4061,82 @@
         btn.disabled = true;
         btn.textContent = 'Provisioning Staff...';
 
-        // Provision via Supabase Edge Function if live
-        if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+        // Provision via server-side Edge Function (Auth Admin API + Profile Sync)
+        if (useSupabaseData()) {
           try {
             const client = window.ApexSupabase.getClient();
-            const session = (await client.auth.getSession())?.data?.session;
-            if (session && session.access_token) {
-              const role = department.includes('Academic') ? 'academic_counsellor' : 'admission_counsellor';
-              const config = window.APEX_SUPABASE_CONFIG;
-              const res = await fetch(`${config.url}/functions/v1/create-counsellor`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${session.access_token}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  email,
-                  password: 'ApexStaffPassword@2026',
-                  full_name: name,
-                  role,
-                  department,
-                  phone: phone || null
-                })
-              });
-              const resData = await res.json();
-              if (!res.ok || resData.error) {
-                btn.disabled = false;
-                btn.textContent = 'Add Counsellor';
-                showToast('Provisioning Error', resData.error || 'Failed to create staff account on Supabase.', 'error');
-                return;
+            let { data: { session }, error: sessErr } = await client.auth.getSession();
+            const nowSec = Math.floor(Date.now() / 1000);
+
+            // Proactively refresh session if expired or expiring within 60s
+            if (!session || sessErr || (session.expires_at && session.expires_at <= nowSec + 60)) {
+              try {
+                const { data: refreshed, error: refErr } = await client.auth.refreshSession();
+                if (!refErr && refreshed?.session?.access_token) {
+                  session = refreshed.session;
+                } else {
+                  session = null;
+                }
+              } catch (_refreshErr) {
+                session = null;
               }
             }
+
+            // Strictly verify active, non-expired Super Admin access token
+            if (!session || !session.access_token || (session.expires_at && session.expires_at <= nowSec)) {
+              btn.disabled = false;
+              btn.textContent = "Add Counsellor";
+              showToast("Session Expired", "Your Super Admin session has expired. Please sign in again.", "error");
+              return;
+            }
+            const config = window.APEX_SUPABASE_CONFIG;
+            const res = await fetch(`${config.url}/functions/v1/create-counsellor`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${session.access_token}`,
+                'apikey': config.anonKey,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                email,
+                password,
+                full_name: name,
+                role,
+                department,
+                phone: phone || null
+              })
+            });
+
+            const resData = await res.json().catch(() => ({}));
+
+            if (!res.ok || resData.error) {
+              btn.disabled = false;
+              btn.textContent = 'Add Counsellor';
+              const errorMsg = resData.error || resData.message || (res.status === 404
+                ? "Edge Function 'create-counsellor' is not deployed. Please deploy via Supabase CLI or create user in Supabase Auth."
+                : `Provisioning failed with status ${res.status}.`);
+              showToast('Provisioning Failed', errorMsg, 'error');
+              return;
+            }
+
+            // Successfully provisioned in Supabase
+            closeModal();
+            showToast('Counsellor Enrolled', `${name} has been provisioned as ${role === 'academic_counsellor' ? 'Academic Counsellor' : 'Admission Counsellor'}.`, 'success');
+            await syncFromSupabase();
+            renderPage();
+            return;
           } catch (err) {
-            console.warn('Edge Function invocation notice:', err);
+            btn.disabled = false;
+            btn.textContent = 'Add Counsellor';
+            showToast('Network Error', err.message || 'Failed to reach Supabase provisioning service.', 'error');
+            return;
           }
         }
 
-        AdminData.addCounsellor({ name, email, phone, department });
+        // Offline / Demo Mode fallback ONLY
+        AdminData.addCounsellor({ name, email, phone, department, role });
         closeModal();
-        showToast('Counsellor Enrolled', `${name} has been added to ${department}.`, 'success');
+        showToast('Counsellor Enrolled', `${name} has been added in demo mode.`, 'success');
         renderPage();
       });
     }
@@ -2965,6 +4200,201 @@
   // ══════════════════════════════════════════════
 
   function attachPageHandlers() {
+
+    // ─── AVAILABILITY MANAGEMENT EVENT HANDLERS ───
+    if (CURRENT_PAGE === "availability") {
+      // Counsellor select change for Super Admin
+      const adminCounsellorSelect = document.getElementById("adminCounsellorSelect");
+      if (adminCounsellorSelect) {
+        adminCounsellorSelect.addEventListener("change", async (e) => {
+          SELECTED_AVAIL_COUNSELLOR_ID = e.target.value;
+          if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+            try {
+              const res = await window.ApexSupabase.getCounsellorAvailabilityConfig(SELECTED_AVAIL_COUNSELLOR_ID);
+              if (res && res.success) {
+                LOADED_AVAIL_SCHEDULE = { counsellorId: SELECTED_AVAIL_COUNSELLOR_ID, schedule: res.schedule || [] };
+                LOADED_AVAIL_UNAVAILABILITY = { counsellorId: SELECTED_AVAIL_COUNSELLOR_ID, list: res.unavailability || [] };
+              }
+            } catch (err) {
+              console.warn("Could not fetch remote availability:", err);
+            }
+          }
+          renderPage();
+        });
+      }
+
+      // Day working / off toggle listeners
+      document.querySelectorAll(".day-avail-toggle").forEach(toggle => {
+        toggle.addEventListener("change", (e) => {
+          const dow = e.target.dataset.dow;
+          const row = document.querySelector(`.avail-day-row[data-dow="${dow}"]`);
+          if (!row) return;
+          const label = row.querySelector(".day-avail-label");
+          const timeControls = row.querySelector(".day-time-controls");
+          const durationControls = row.querySelector(".day-duration-controls");
+          const breakControls = row.querySelector(".day-break-controls");
+
+          if (e.target.checked) {
+            if (label) { label.textContent = "Working"; label.style.color = "#059669"; }
+            if (timeControls) timeControls.classList.remove("opacity-40", "pointer-events-none");
+            if (durationControls) durationControls.classList.remove("opacity-40", "pointer-events-none");
+            if (breakControls) breakControls.classList.remove("opacity-40", "pointer-events-none");
+          } else {
+            if (label) { label.textContent = "Day Off"; label.style.color = "#94A3B8"; }
+            if (timeControls) timeControls.classList.add("opacity-40", "pointer-events-none");
+            if (durationControls) durationControls.classList.add("opacity-40", "pointer-events-none");
+            if (breakControls) breakControls.classList.add("opacity-40", "pointer-events-none");
+          }
+        });
+      });
+
+      // Break period toggle listeners
+      document.querySelectorAll(".day-break-toggle").forEach(toggle => {
+        toggle.addEventListener("change", (e) => {
+          const dow = e.target.dataset.dow;
+          const row = document.querySelector(`.avail-day-row[data-dow="${dow}"]`);
+          if (!row) return;
+          const breakInputs = row.querySelector(".break-time-inputs");
+          if (breakInputs) {
+            if (e.target.checked) {
+              breakInputs.classList.remove("opacity-30", "pointer-events-none");
+            } else {
+              breakInputs.classList.add("opacity-30", "pointer-events-none");
+            }
+          }
+        });
+      });
+
+      // Save weekly availability button
+      const saveAvailBtn = document.getElementById("saveWeeklyAvailabilityBtn");
+      if (saveAvailBtn) {
+        saveAvailBtn.addEventListener("click", async () => {
+          const targetCounsellorId = document.getElementById("availTargetCounsellorId")?.value || SESSION.userId;
+          const rows = document.querySelectorAll(".avail-day-row");
+          const schedule = [];
+
+          rows.forEach(row => {
+            const dow = parseInt(row.dataset.dow, 10);
+            const isAvail = row.querySelector(".day-avail-toggle")?.checked || false;
+            const startTime = row.querySelector(".day-start-select")?.value || "09:00";
+            const endTime = row.querySelector(".day-end-select")?.value || "18:00";
+            const duration = parseInt(row.querySelector(".day-duration-select")?.value || "30", 10);
+            const hasBreak = row.querySelector(".day-break-toggle")?.checked || false;
+            const breakStart = row.querySelector(".day-break-start")?.value || "13:00";
+            const breakEnd = row.querySelector(".day-break-end")?.value || "14:00";
+
+            schedule.push({
+              day_of_week: dow,
+              is_available: isAvail,
+              start_time: startTime + ":00",
+              end_time: endTime + ":00",
+              slot_duration_minutes: duration,
+              has_break: hasBreak,
+              break_start: hasBreak ? breakStart + ":00" : null,
+              break_end: hasBreak ? breakEnd + ":00" : null
+            });
+          });
+
+          saveAvailBtn.disabled = true;
+          saveAvailBtn.innerHTML = "Saving...";
+
+          try {
+            // Save to live Supabase if live
+            if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+              const res = await window.ApexSupabase.saveCounsellorAvailability(targetCounsellorId, schedule);
+              if (!res || !res.success) throw new Error(res?.message || "Failed to save to Supabase.");
+            }
+            // Always update AdminData store
+            if (typeof AdminData.saveCounsellorAvailability === "function") {
+              AdminData.saveCounsellorAvailability(targetCounsellorId, schedule);
+            }
+            LOADED_AVAIL_SCHEDULE = { counsellorId: targetCounsellorId, schedule };
+            showToast("Availability Saved", "Weekly schedule updated! Public booking slots reflect changes immediately.", "success");
+          } catch (err) {
+            console.error("Save availability error:", err);
+            showToast("Save Error", err.message || "Could not save availability schedule.", "error");
+          } finally {
+            saveAvailBtn.disabled = false;
+            saveAvailBtn.innerHTML = "💾 Save Weekly Availability";
+          }
+        });
+      }
+
+      // Add Leave / Block Date form submission
+      const addLeaveForm = document.getElementById("addLeaveForm");
+      if (addLeaveForm) {
+        addLeaveForm.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const targetCounsellorId = document.getElementById("availTargetCounsellorId")?.value || SESSION.userId;
+          const dateInput = document.getElementById("leaveDateInput");
+          const reasonInput = document.getElementById("leaveReasonInput");
+          const isInstWideCheck = document.getElementById("instituteWideHolidayCheck");
+
+          const selectedDate = dateInput?.value;
+          const reason = reasonInput?.value || "Scheduled Leave";
+          const isInstWide = isInstWideCheck?.checked || false;
+          const counsellorParam = isInstWide ? null : targetCounsellorId;
+
+          if (!selectedDate) {
+            showToast("Missing Date", "Please select a date to block.", "warning");
+            return;
+          }
+
+          try {
+            if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+              const res = await window.ApexSupabase.manageCounsellorUnavailability("add", counsellorParam, selectedDate, reason);
+              if (!res || !res.success) throw new Error(res?.message || "Failed to record leave date.");
+            }
+            if (typeof AdminData.addUnavailability === "function") {
+              AdminData.addUnavailability(counsellorParam, selectedDate, reason);
+            }
+            showToast("Date Blocked", `Bookings disabled for ${selectedDate}.`, "success");
+            // Refresh config
+            if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+              const res = await window.ApexSupabase.getCounsellorAvailabilityConfig(targetCounsellorId);
+              if (res && res.success) {
+                LOADED_AVAIL_UNAVAILABILITY = { counsellorId: targetCounsellorId, list: res.unavailability || [] };
+              }
+            }
+            renderPage();
+          } catch (err) {
+            console.error("Add leave error:", err);
+            showToast("Error", err.message || "Could not block date.", "error");
+          }
+        });
+      }
+
+      // Remove / Unblock date button
+      document.querySelectorAll(".remove-unavail-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const unavailId = btn.dataset.id;
+          const targetCounsellorId = document.getElementById("availTargetCounsellorId")?.value || SESSION.userId;
+
+          try {
+            if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+              const res = await window.ApexSupabase.manageCounsellorUnavailability("delete", null, null, null, unavailId);
+              if (!res || !res.success) throw new Error(res?.message || "Failed to remove blocked date.");
+            }
+            if (typeof AdminData.deleteUnavailability === "function") {
+              AdminData.deleteUnavailability(unavailId);
+            }
+            showToast("Date Unblocked", "Calendar date unblocked successfully.", "info");
+            // Refresh
+            if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+              const res = await window.ApexSupabase.getCounsellorAvailabilityConfig(targetCounsellorId);
+              if (res && res.success) {
+                LOADED_AVAIL_UNAVAILABILITY = { counsellorId: targetCounsellorId, list: res.unavailability || [] };
+              }
+            }
+            renderPage();
+          } catch (err) {
+            console.error("Remove unavail error:", err);
+            showToast("Error", err.message || "Could not remove blocked date.", "error");
+          }
+        });
+      });
+    }
+
     // CSV Export Triggers
     const expAdmBtn = $('#exportAdmissionsBtn');
     if (expAdmBtn) {
@@ -3021,10 +4451,8 @@
             showToast('Database Error', err.message || 'Could not complete follow-up.', 'error');
             return;
           }
-        } else {
-          // Demo mode
-          AdminData.completeFollowUp(fuId);
         }
+        AdminData.completeFollowUp(fuId);
         showToast('Task Completed', 'Follow-up resolved successfully.', 'success');
         renderPage();
         buildSidebar();
@@ -3035,9 +4463,15 @@
     document.querySelectorAll('[data-page]').forEach(btn => {
       if (btn.closest('.sidebar-nav')) return;
       btn.addEventListener('click', () => {
-        CURRENT_PAGE = btn.dataset.page;
-        renderPage();
-        buildSidebar();
+        const targetPage = btn.dataset.page;
+        if (isPageAllowedForRole(targetPage, SESSION.role)) {
+          CURRENT_PAGE = targetPage;
+          window.location.hash = '#' + targetPage;
+          renderPage();
+          buildSidebar();
+        } else {
+          showToast('Access Restricted', 'Module not authorized for your role.', 'warning');
+        }
       });
     });
 
@@ -3045,21 +4479,25 @@
     const addCounBtn = document.getElementById('addCounsellorBtn');
     if (addCounBtn) addCounBtn.addEventListener('click', showAddCounsellorModal);
 
-    // Reset Demo in Settings
+    // Reset Demo in Settings — hidden when Supabase is live
     const resetSettingsBtn = document.getElementById('settingsResetDemoBtn');
     if (resetSettingsBtn) {
-      resetSettingsBtn.addEventListener('click', () => {
-        confirmAction(
-          'Reset Demonstration Data?',
-          'This will purge all custom modifications and restore default sample admissions, bookings, and follow-ups.',
-          () => {
-            AdminData.resetDemoData();
-            showToast('Factory State Restored', 'All sample records reset to initial baseline.', 'info');
-            renderPage();
-            buildSidebar();
-          }
-        );
-      });
+      if (useSupabaseData()) {
+        resetSettingsBtn.style.display = 'none';
+      } else {
+        resetSettingsBtn.addEventListener('click', () => {
+          confirmAction(
+            'Reset Demonstration Data?',
+            'This will purge all custom modifications and restore default sample admissions, bookings, and follow-ups.',
+            () => {
+              AdminData.resetDemoData();
+              showToast('Factory State Restored', 'All sample records reset to initial baseline.', 'info');
+              renderPage();
+              buildSidebar();
+            }
+          );
+        });
+      }
     }
 
     // ─── Filter & Search Logic for Admissions ───
@@ -3077,10 +4515,10 @@
       const q = enqSearch?.value?.toLowerCase().trim();
       if (q) {
         list = list.filter(e =>
-          e.studentName.toLowerCase().includes(q) ||
-          e.mobile.includes(q) ||
-          e.id.toLowerCase().includes(q) ||
-          e.email.toLowerCase().includes(q)
+          (e.studentName || '').toLowerCase().includes(q) ||
+          (e.mobile || '').includes(q) ||
+          (e.id || '').toLowerCase().includes(q) ||
+          (e.email || '').toLowerCase().includes(q)
         );
       }
       if (enqCourse?.value) {
@@ -3130,10 +4568,10 @@
       const q = bkSearch?.value?.toLowerCase().trim();
       if (q) {
         list = list.filter(b =>
-          b.studentName.toLowerCase().includes(q) ||
-          b.mobile.includes(q) ||
-          b.id.toLowerCase().includes(q) ||
-          b.email.toLowerCase().includes(q)
+          (b.studentName || '').toLowerCase().includes(q) ||
+          (b.mobile || '').includes(q) ||
+          (b.id || '').toLowerCase().includes(q) ||
+          (b.email || '').toLowerCase().includes(q)
         );
       }
       if (bkDate?.value) {
@@ -3172,18 +4610,7 @@
   // BOOTSTRAP INITIALIZATION
   // ══════════════════════════════════════════════
 
-  document.addEventListener('DOMContentLoaded', async () => {
-    // Verify session against Supabase Auth (or localStorage in demo mode)
-    SESSION = await verifySessionWithSupabase();
-    if (!SESSION) {
-      // verifySessionWithSupabase already redirected; just stop execution
-      return;
-    }
-
-    buildSidebar();
-    syncRoleSwitcher();
-    renderPage();
-
+  function setupDashboardInteractions() {
     // In-App Notification Center Triggers
     const notifBellBtn = $('#notifBellBtn');
     if (notifBellBtn) {
@@ -3204,7 +4631,7 @@
 
     // Hash Route Synchronization & Page Restoration
     const initialHash = window.location.hash.replace('#', '');
-    if (initialHash && isPageAllowedForRole(initialHash, SESSION.role)) {
+    if (initialHash && SESSION && isPageAllowedForRole(initialHash, SESSION.role)) {
       CURRENT_PAGE = initialHash;
     } else {
       window.location.hash = '#' + CURRENT_PAGE;
@@ -3212,7 +4639,7 @@
 
     window.addEventListener('hashchange', () => {
       const hashPage = window.location.hash.replace('#', '');
-      if (hashPage && isPageAllowedForRole(hashPage, SESSION.role) && hashPage !== CURRENT_PAGE) {
+      if (SESSION && hashPage && isPageAllowedForRole(hashPage, SESSION.role) && hashPage !== CURRENT_PAGE) {
         CURRENT_PAGE = hashPage;
         renderPage();
         buildSidebar();
@@ -3252,21 +4679,26 @@
     setTimeout(() => {
       startInteractiveTour(false);
     }, 600);
+
     // Top Bar Reset Demo Button
     const resetDemoBtn = $('#resetDemoBtn');
     if (resetDemoBtn) {
-      resetDemoBtn.addEventListener('click', () => {
-        confirmAction(
-          'Reset Demonstration Data?',
-          'Restore initial mock admissions, counselling bookings, and counsellor workload records?',
-          () => {
-            AdminData.resetDemoData();
-            showToast('Data Restored', 'Demo records reset to baseline state.', 'info');
-            renderPage();
-            buildSidebar();
-          }
-        );
-      });
+      if (useSupabaseData()) {
+        resetDemoBtn.style.display = 'none';
+      } else {
+        resetDemoBtn.addEventListener('click', () => {
+          confirmAction(
+            'Reset Demonstration Data?',
+            'Restore initial mock admissions, counselling bookings, and counsellor workload records?',
+            () => {
+              AdminData.resetDemoData();
+              showToast('Data Restored', 'Demo records reset to baseline state.', 'info');
+              renderPage();
+              buildSidebar();
+            }
+          );
+        });
+      }
     }
 
     // Mobile Sidebar Toggles
@@ -3304,6 +4736,65 @@
         closeMobileSidebar();
       }
     });
-  });
+  }
+
+  async function bootDashboard() {
+    // 1. FAST PATH: Synchronously load session from localStorage so UI paints in 0ms
+    SESSION = getSessionFromStorage();
+    if (!SESSION) {
+      // If Supabase is configured, attempt async verification before redirecting
+      if (window.ApexSupabase && window.ApexSupabase.isLive()) {
+        try {
+          SESSION = await verifySessionWithSupabase();
+        } catch (e) {
+          SESSION = null;
+        }
+      }
+      if (!SESSION) {
+        window.location.href = 'login.html';
+        return;
+      }
+    }
+
+    // Expose verified session globally for helper functions
+    window.SESSION = SESSION;
+
+    // 2. Render UI Immediately:
+    // Build sidebar and render active page so skeleton is instantly replaced in 0ms
+    try {
+      buildSidebar();
+      syncRoleSwitcher();
+      renderPage();
+    } catch (initialRenderErr) {
+      console.warn('Initial layout render notice:', initialRenderErr);
+    }
+
+    // 3. Setup event listeners, notifications, modals & hash navigation
+    try {
+      setupDashboardInteractions();
+    } catch (interactionErr) {
+      console.warn('Interaction listener registration notice:', interactionErr);
+    }
+
+    // 4. Background Verification & Live Supabase Synchronization
+    if (useSupabaseData()) {
+      (async () => {
+        try {
+          await syncFromSupabase();
+          // Seamlessly update page & sidebar with live records and fresh badge counts
+          buildSidebar();
+          renderPage();
+        } catch (syncErr) {
+          console.warn('Background Supabase synchronization notice:', syncErr);
+        }
+      })();
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootDashboard);
+  } else {
+    bootDashboard();
+  }
 
 })();

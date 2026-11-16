@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name TEXT NOT NULL CHECK (LENGTH(TRIM(full_name)) >= 2),
     email TEXT UNIQUE NOT NULL CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
-    role public.app_role NOT NULL DEFAULT 'admission_counsellor',
+    role public.app_role,
     department TEXT NOT NULL DEFAULT 'General Administration',
     specialisation TEXT,
     daily_capacity INTEGER NOT NULL DEFAULT 10 CHECK (daily_capacity >= 1 AND daily_capacity <= 50),
@@ -87,6 +87,129 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_active ON public.profiles(is_active);
+
+-- Automatic Profile Provisioning Trigger on auth.users
+-- Automatically provisions an administrative profile in public.profiles whenever a new user is created in Supabase Auth.
+CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_role public.app_role := NULL;
+    v_raw_role TEXT;
+BEGIN
+    -- Read role explicitly from user metadata if provided
+    v_raw_role := LOWER(TRIM(COALESCE(
+        NEW.raw_user_meta_data->>'role',
+        NEW.raw_app_meta_data->>'role'
+    )));
+    
+    IF v_raw_role IN ('super_admin', 'admission_counsellor', 'academic_counsellor') THEN
+        v_role := v_raw_role::public.app_role;
+    END IF;
+
+    INSERT INTO public.profiles (
+        id,
+        email,
+        full_name,
+        role,
+        department,
+        is_active,
+        daily_capacity
+    )
+    VALUES (
+        NEW.id,
+        LOWER(TRIM(NEW.email)),
+        COALESCE(
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
+            INITCAP(SPLIT_PART(NEW.email, '@', 1))
+        ),
+        v_role, -- Explicit role from metadata, or NULL (awaiting admin assignment)
+        COALESCE(
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'department'), ''),
+            CASE 
+                WHEN v_role = 'super_admin' THEN 'Executive Administration'
+                WHEN v_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+                WHEN v_role = 'admission_counsellor' THEN 'Admission Department'
+                ELSE 'General Administration'
+            END
+        ),
+        true,
+        10
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        updated_at = NOW();
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
+
+-- Self-Healing Profile Synchronization RPC
+-- Allows authenticated staff to retrieve (and if missing, auto-provision) their administrative profile.
+CREATE OR REPLACE FUNCTION public.get_or_sync_current_profile()
+RETURNS TABLE (
+    id UUID,
+    full_name TEXT,
+    email TEXT,
+    role public.app_role,
+    department TEXT,
+    specialisation TEXT,
+    daily_capacity INTEGER,
+    phone TEXT,
+    is_active BOOLEAN
+) AS $$
+DECLARE
+    v_uid UUID;
+    v_email TEXT;
+BEGIN
+    v_uid := auth.uid();
+    IF v_uid IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- If profile does not exist, check if user exists in auth.users and provision
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE public.profiles.id = v_uid) THEN
+        SELECT u.email INTO v_email FROM auth.users u WHERE u.id = v_uid;
+        
+        IF v_email IS NOT NULL THEN
+            INSERT INTO public.profiles (
+                id,
+                email,
+                full_name,
+                role,
+                department,
+                is_active,
+                daily_capacity
+            )
+            VALUES (
+                v_uid,
+                LOWER(TRIM(v_email)),
+                INITCAP(SPLIT_PART(v_email, '@', 1)),
+                NULL, -- Explicitly NULL until admin assigns
+                'General Administration',
+                true,
+                10
+            )
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
+    END IF;
+
+    RETURN QUERY
+    SELECT p.id, p.full_name, p.email, p.role, p.department, p.specialisation, p.daily_capacity, p.phone, p.is_active
+    FROM public.profiles p
+    WHERE p.id = v_uid;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_or_sync_current_profile() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_or_sync_current_profile() TO authenticated;
 
 -- Trusted Role Retrieval Helper Function
 -- Returns verified role ONLY if user is authenticated and is_active = true.
@@ -145,11 +268,12 @@ GRANT EXECUTE ON FUNCTION public.get_staff_directory() TO authenticated;
 -- Trigger Function: Protect Privileged Profile Fields
 -- Prevents ordinary staff from modifying role, is_active, or daily_capacity.
 -- Replaces recursive subqueries in RLS with a direct, reliable BEFORE UPDATE check.
+-- Permits service_role and database administrators (where auth.uid() is NULL) and Super Admin to update.
 CREATE OR REPLACE FUNCTION public.protect_profile_privileged_fields()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Super Admin can manage all fields
-    IF public.current_user_role() != 'super_admin' THEN
+    -- Only enforce restrictions for ordinary authenticated staff through client APIs (where auth.uid() is not null)
+    IF auth.uid() IS NOT NULL AND public.current_user_role() IS DISTINCT FROM 'super_admin' THEN
         IF NEW.role IS DISTINCT FROM OLD.role THEN
             RAISE EXCEPTION 'Unauthorized: Ordinary staff cannot alter their assigned role.';
         END IF;
@@ -169,6 +293,96 @@ DROP TRIGGER IF EXISTS trg_protect_profile_fields ON public.profiles;
 CREATE TRIGGER trg_protect_profile_fields
 BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.protect_profile_privileged_fields();
+
+-- Safe Helper Function for Assigning Admin Roles
+-- Super Admin or database administrator can call this helper to immediately link any email to its correct role.
+-- Also auto-provisions default availability slots if role is academic_counsellor.
+CREATE OR REPLACE FUNCTION public.assign_admin_role(
+    p_email TEXT,
+    p_role public.app_role,
+    p_department TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_target_id UUID;
+    v_dept TEXT;
+    v_day INT;
+BEGIN
+    -- 1. Find profile by email (case-insensitive)
+    SELECT id INTO v_target_id 
+    FROM public.profiles 
+    WHERE LOWER(TRIM(email)) = LOWER(TRIM(p_email));
+
+    -- If profile doesn't exist yet, check auth.users and create matching profile
+    IF v_target_id IS NULL THEN
+        SELECT id INTO v_target_id 
+        FROM auth.users 
+        WHERE LOWER(TRIM(email)) = LOWER(TRIM(p_email));
+        
+        IF v_target_id IS NULL THEN
+            RETURN jsonb_build_object(
+                'success', false, 
+                'message', 'User with email ' || p_email || ' not found in Authentication users. Please create the user first in Supabase Auth.'
+            );
+        END IF;
+
+        INSERT INTO public.profiles (
+            id, email, full_name, role, department, is_active, daily_capacity
+        ) VALUES (
+            v_target_id,
+            LOWER(TRIM(p_email)),
+            INITCAP(SPLIT_PART(p_email, '@', 1)),
+            p_role,
+            COALESCE(p_department, CASE 
+                WHEN p_role = 'super_admin' THEN 'Executive Administration'
+                WHEN p_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+                WHEN p_role = 'admission_counsellor' THEN 'Admission Department'
+                ELSE 'General Administration'
+            END),
+            true,
+            10
+        );
+    ELSE
+        -- 2. Update existing profile role & department
+        v_dept := COALESCE(p_department, CASE 
+            WHEN p_role = 'super_admin' THEN 'Executive Administration'
+            WHEN p_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+            WHEN p_role = 'admission_counsellor' THEN 'Admission Department'
+            ELSE 'General Administration'
+        END);
+
+        UPDATE public.profiles
+        SET 
+            role = p_role,
+            department = v_dept,
+            is_active = true,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    END IF;
+
+    -- 3. If role is academic_counsellor, ensure baseline availability slots exist for Monday-Saturday
+    IF p_role = 'academic_counsellor' THEN
+        FOR v_day IN 1..6 LOOP
+            INSERT INTO public.counsellor_availability (
+                counsellor_id, day_of_week, start_time, end_time, slot_duration_minutes, is_available, is_active
+            ) VALUES (
+                v_target_id, v_day, '09:00:00'::TIME, '20:30:00'::TIME, 30, true, true
+            ) ON CONFLICT (counsellor_id, day_of_week, start_time, end_time) DO NOTHING;
+        END LOOP;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Role successfully assigned to ' || p_email || ' as ' || p_role::TEXT,
+        'profile_id', v_target_id,
+        'role', p_role::TEXT
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.assign_admin_role(TEXT, public.app_role, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.assign_admin_role(TEXT, public.app_role, TEXT) TO service_role, postgres;
 
 -- =============================================================================
 -- 4. CENTRAL STUDENTS TABLE (Deduplicated Aspirant Repository)
@@ -346,6 +560,7 @@ CREATE INDEX IF NOT EXISTS idx_batches_open ON public.batches(is_admission_open)
 CREATE TABLE IF NOT EXISTS public.admission_enquiries (
     id TEXT PRIMARY KEY DEFAULT ('ENQ-' || TO_CHAR(NOW(), 'YYYY') || '-' || LPAD(NEXTVAL('public.seq_admission_enquiry_id')::TEXT, 5, '0')),
     student_id UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    student_name TEXT,
     course_id TEXT NOT NULL REFERENCES public.courses(id) ON DELETE RESTRICT,
     course_category TEXT NOT NULL,
     target_examination TEXT NOT NULL,
@@ -391,13 +606,18 @@ CREATE TABLE IF NOT EXISTS public.counselling_bookings (
 CREATE INDEX IF NOT EXISTS idx_counselling_student ON public.counselling_bookings(student_id);
 CREATE INDEX IF NOT EXISTS idx_counselling_course ON public.counselling_bookings(course_id);
 CREATE INDEX IF NOT EXISTS idx_counselling_counsellor ON public.counselling_bookings(assigned_counsellor_id);
+
+
+
+-- Prevent double-booking: same counsellor, same date, same time slot for active bookings
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_no_double_booking
+
+ON public.counselling_bookings (assigned_counsellor_id, preferred_date, preferred_time)
+
+WHERE status IN ('Assigned', 'Confirmed') AND assigned_counsellor_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_counselling_date ON public.counselling_bookings(preferred_date);
 CREATE INDEX IF NOT EXISTS idx_counselling_status ON public.counselling_bookings(status);
-
--- Partial Unique Index: Prevents Double-Booking for Assigned/Confirmed Sessions
-CREATE UNIQUE INDEX IF NOT EXISTS idx_counselling_no_double_book
-ON public.counselling_bookings (assigned_counsellor_id, preferred_date, preferred_time)
-WHERE status IN ('Confirmed', 'Assigned') AND assigned_counsellor_id IS NOT NULL;
 
 -- =============================================================================
 -- 8. BOOKING RESCHEDULE HISTORY TABLE
@@ -470,7 +690,9 @@ CREATE INDEX IF NOT EXISTS idx_followups_status ON public.follow_ups(status);
 
 -- Trigger: Validate student and parent record consistency for follow-ups
 CREATE OR REPLACE FUNCTION public.validate_follow_up_parent()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+AS $$
 DECLARE
     v_parent_student_id UUID;
 BEGIN
@@ -479,7 +701,7 @@ BEGIN
         IF v_parent_student_id IS NULL THEN
             RAISE EXCEPTION 'Referenced admission enquiry does not exist.';
         END IF;
-        IF NEW.student_id != v_parent_student_id THEN
+        IF NEW.student_id IS DISTINCT FROM v_parent_student_id THEN
             RAISE EXCEPTION 'Follow-up student_id (%) does not match enquiry student_id (%).', NEW.student_id, v_parent_student_id;
         END IF;
     ELSIF NEW.booking_id IS NOT NULL THEN
@@ -487,14 +709,15 @@ BEGIN
         IF v_parent_student_id IS NULL THEN
             RAISE EXCEPTION 'Referenced counselling booking does not exist.';
         END IF;
-        IF NEW.student_id != v_parent_student_id THEN
+        IF NEW.student_id IS DISTINCT FROM v_parent_student_id THEN
             RAISE EXCEPTION 'Follow-up student_id (%) does not match booking student_id (%).', NEW.student_id, v_parent_student_id;
         END IF;
     END IF;
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_validate_followup_parent ON public.follow_ups;
 CREATE TRIGGER trg_validate_followup_parent
@@ -506,7 +729,7 @@ CREATE OR REPLACE FUNCTION public.protect_followup_assignment()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'UPDATE') THEN
-        IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to AND public.current_user_role() != 'super_admin' THEN
+        IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to AND public.current_user_role() IS DISTINCT FROM 'super_admin' THEN
             RAISE EXCEPTION 'Unauthorized: Only Super Admins can reassign follow-ups to another staff member.';
         END IF;
     END IF;
@@ -541,7 +764,9 @@ CREATE INDEX IF NOT EXISTS idx_availability_counsellor ON public.counsellor_avai
 
 -- Trigger: Ensure availability is only configured for active counsellor profiles
 CREATE OR REPLACE FUNCTION public.validate_counsellor_availability()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+AS $$
 DECLARE
     v_role public.app_role;
     v_active BOOLEAN;
@@ -560,7 +785,8 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_validate_counsellor_availability ON public.counsellor_availability;
 CREATE TRIGGER trg_validate_counsellor_availability
@@ -642,7 +868,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.internal_log_activity FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.internal_log_activity(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) FROM PUBLIC;
 
 -- =============================================================================
 -- 14B. NOTIFICATION DELIVERY AUDIT LOGS TABLE (Resend & Meta WhatsApp)
@@ -707,7 +933,8 @@ BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_profiles_updated_at ON public.profiles;
 CREATE TRIGGER trg_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
@@ -767,7 +994,7 @@ BEGIN
 
     -- Notification on Status Transition
     IF (TG_OP = 'UPDATE') AND (OLD.status IS DISTINCT FROM NEW.status) THEN
-        IF NEW.assigned_counsellor_id IS NOT NULL AND NEW.assigned_counsellor_id != COALESCE(v_actor_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN
+        IF NEW.assigned_counsellor_id IS NOT NULL AND NEW.assigned_counsellor_id IS DISTINCT FROM COALESCE(v_actor_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN
             INSERT INTO public.notifications (recipient_id, title, message, notification_type, related_record_id)
             VALUES (
                 NEW.assigned_counsellor_id,
@@ -949,7 +1176,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.auto_assign_admission_enquiry FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.auto_assign_admission_enquiry(TEXT) FROM PUBLIC;
 
 
 -- Automatic Counsellor Assignment Engine: Counselling Bookings
@@ -1082,7 +1309,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.auto_assign_counselling_booking FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.auto_assign_counselling_booking(TEXT, DATE, TEXT, TEXT) FROM PUBLIC;
 
 
 -- Super Admin Manual Lead Reassignment RPC
@@ -1100,7 +1327,8 @@ BEGIN
     v_user_id := auth.uid();
     v_user_role := public.current_user_role();
 
-    IF v_user_role != 'super_admin' THEN
+
+    IF v_user_role IS DISTINCT FROM 'super_admin' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Administrators can reassign leads.');
     END IF;
 
@@ -1171,8 +1399,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.reassign_admission_enquiry FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reassign_admission_enquiry TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reassign_admission_enquiry(TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reassign_admission_enquiry(TEXT, UUID) TO authenticated;
 
 
 -- Super Admin Manual Booking Reassignment RPC
@@ -1191,7 +1419,7 @@ BEGIN
     v_user_id := auth.uid();
     v_user_role := public.current_user_role();
 
-    IF v_user_role != 'super_admin' THEN
+    IF v_user_role IS DISTINCT FROM 'super_admin' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Administrators can reassign counselling sessions.');
     END IF;
 
@@ -1275,8 +1503,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.reassign_counselling_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reassign_counselling_booking TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reassign_counselling_booking(TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reassign_counselling_booking(TEXT, UUID) TO authenticated;
 
 -- 16. SECURE PUBLIC SUBMISSION & RESCHEDULE RPC FUNCTIONS
 -- =============================================================================
@@ -1337,9 +1565,9 @@ BEGIN
     -- 11. Create notification outbox entry for async processing
     BEGIN
         INSERT INTO public.notification_outbox (
-            event_type, entity_type, entity_id, priority, scheduled_at, status
+            event_type, entity_type, entity_id, channel, status, scheduled_at
         ) VALUES (
-            'enquiry_acknowledgement', 'admission_enquiry', v_enquiry_id, 1, NOW(), 'pending'
+            'enquiry_submitted', 'admission_enquiry', v_enquiry_id::TEXT, 'both', 'pending', NOW()
         ) RETURNING id INTO v_outbox_id;
     EXCEPTION WHEN OTHERS THEN
         -- Non-fatal: outbox failure must not fail the enquiry submission
@@ -1357,8 +1585,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.submit_admission_enquiry FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.submit_admission_enquiry TO anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.submit_admission_enquiry(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.submit_admission_enquiry(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 
 -- Public Counselling Booking Submission RPC
 -- Validates:
@@ -1379,24 +1607,57 @@ CREATE OR REPLACE FUNCTION public.submit_counselling_booking(
 )
 RETURNS JSONB AS $$
 DECLARE
+    v_clean_phone TEXT;
+    v_clean_email TEXT;
     v_student_id UUID;
     v_booking_id TEXT;
     v_course_id TEXT;
     v_today_ist DATE;
+    v_now_time_ist TIME;
     v_dow INTEGER;
     v_start_match TEXT[];
-    v_end_match TEXT[];
     v_slot_start TIME;
     v_slot_end TIME;
     v_configured_avail_count INTEGER;
     v_total_avail_counsellors INTEGER;
     v_booked_counsellors INTEGER;
     v_assigned_counsellor_id UUID;
+    v_holiday_reason TEXT;
     v_generated_meet_link TEXT;
-    v_outbox_id UUID;
+    v_clean_time_slot TEXT;
+    v_student_outbox_id UUID;
+    v_counsellor_outbox_id UUID;
 BEGIN
-    -- 1. Evaluate current date strictly in Asia/Kolkata timezone
+    -- 1. Validate mandatory student name
+    IF TRIM(COALESCE(p_full_name, '')) = '' OR LENGTH(TRIM(p_full_name)) < 2 THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Full name must contain at least 2 characters.');
+    END IF;
+
+    -- 2. Normalize and validate 10-digit Indian phone number
+    v_clean_phone := REGEXP_REPLACE(COALESCE(p_phone, ''), '\D', '', 'g');
+    IF LENGTH(v_clean_phone) > 10 THEN
+        v_clean_phone := RIGHT(v_clean_phone, 10);
+    END IF;
+    IF LENGTH(v_clean_phone) != 10 OR v_clean_phone !~ '^[6-9]\d{9}$' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Please provide a valid 10-digit Indian mobile number.');
+    END IF;
+
+    -- 3. Normalize and validate email address
+    v_clean_email := LOWER(TRIM(COALESCE(p_email, '')));
+    IF v_clean_email !~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Please enter a valid email address.');
+    END IF;
+
+    -- 4. Standardize slot time string
+    v_clean_time_slot := TRIM(REPLACE(REPLACE(p_preferred_time, '–', '-'), '—', '-'));
+    IF v_clean_time_slot = '' THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Preferred time slot is required.');
+    END IF;
+
+    -- 5. Evaluate date strictly in Asia/Kolkata timezone
     v_today_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
+    v_now_time_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::TIME;
+
     IF p_preferred_date < v_today_ist THEN
         RETURN jsonb_build_object('success', false, 'message', 'Preferred appointment date cannot be in the past.');
     END IF;
@@ -1405,27 +1666,47 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Appointments cannot be scheduled more than 60 days in advance.');
     END IF;
 
-    -- 2. Validate session medium
+    -- 6. Check for institute-wide holiday / closure
+    SELECT reason INTO v_holiday_reason
+    FROM public.counsellor_unavailability
+    WHERE counsellor_id IS NULL AND unavailable_date = p_preferred_date
+    LIMIT 1;
+
+    IF v_holiday_reason IS NOT NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'The institute is closed on ' || p_preferred_date || ' (' || COALESCE(v_holiday_reason, 'Scheduled closure') || '). Please select an alternate date.'
+        );
+    END IF;
+
+    -- 7. Validate session medium
     IF p_session_medium NOT IN ('Google Meet HD Video Call', 'Direct Telephonic Call (Audio)', 'Campus In-Person Counselling') THEN
         RETURN jsonb_build_object('success', false, 'message', 'Invalid session medium specified.');
     END IF;
 
-    -- 3. Parse preferred time window (e.g. '10:30 AM – 11:00 AM' or '10:30 AM')
-    v_start_match := regexp_match(p_preferred_time, '([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))', 'i');
+    -- 8. Parse preferred time window (e.g. '10:00 AM - 10:30 AM')
+    v_start_match := regexp_match(v_clean_time_slot, '([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))', 'i');
     IF v_start_match IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Invalid time slot format provided: ' || COALESCE(p_preferred_time, 'empty'));
+        RETURN jsonb_build_object('success', false, 'message', 'Invalid time slot format provided: ' || COALESCE(v_clean_time_slot, 'empty'));
     END IF;
 
     BEGIN
         v_slot_start := TO_TIMESTAMP(v_start_match[1], 'HH12:MI AM')::TIME;
     EXCEPTION WHEN OTHERS THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Could not parse appointment start time: ' || v_start_match[1]);
+        RETURN jsonb_build_object('success', false, 'message', 'Could not parse start time from: ' || v_clean_time_slot);
     END;
 
-    v_end_match := regexp_match(p_preferred_time, '[-–—]\s*([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))', 'i');
-    IF v_end_match IS NOT NULL THEN
+    -- Parse or derive slot end time
+    IF v_clean_time_slot LIKE '%-%' THEN
+        DECLARE
+            v_second_match TEXT[];
         BEGIN
-            v_slot_end := TO_TIMESTAMP(v_end_match[1], 'HH12:MI AM')::TIME;
+            v_second_match := regexp_match(SUBSTRING(v_clean_time_slot FROM POSITION('-' IN v_clean_time_slot) + 1), '([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM))', 'i');
+            IF v_second_match IS NOT NULL THEN
+                v_slot_end := TO_TIMESTAMP(v_second_match[1], 'HH12:MI AM')::TIME;
+            ELSE
+                v_slot_end := v_slot_start + INTERVAL '30 minutes';
+            END IF;
         EXCEPTION WHEN OTHERS THEN
             v_slot_end := v_slot_start + INTERVAL '30 minutes';
         END;
@@ -1437,31 +1718,38 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Invalid slot duration: End time must be after start time.');
     END IF;
 
-    -- 4. Validate working days and counsellor availability
-    v_dow := EXTRACT(DOW FROM p_preferred_date)::INTEGER; -- 0=Sunday, 6=Saturday
+    -- Enforce operating hours window: 09:00 AM to 08:00 PM (final slot 07:30 PM - 08:00 PM)
+    IF v_slot_start < '09:00:00'::TIME OR v_slot_end > '20:00:00'::TIME THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Requested consultation slot must fall within institute operating hours (09:00 AM to 08:00 PM).'
+        );
+    END IF;
 
+    -- If booking for today, reject slots that are in the past or within 15 minutes
+    IF p_preferred_date = v_today_ist AND v_slot_start <= (v_now_time_ist + INTERVAL '15 minutes') THEN
+        RETURN jsonb_build_object('success', false, 'message', 'This time slot has already passed for today. Please select a later time slot.');
+    END IF;
+
+    -- 9. ATOMIC CONCURRENCY LOCK: Serializes concurrent booking requests for the exact same date & slot
+    PERFORM pg_advisory_xact_lock(hashtext('counselling_booking_' || p_preferred_date::TEXT || '_' || v_clean_time_slot));
+
+    -- 10. Validate working days (Sunday = 0 is closed)
+    v_dow := EXTRACT(DOW FROM p_preferred_date)::INTEGER;
+    IF v_dow = 0 THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Counselling sessions are unavailable on Sundays. Please select a Monday to Saturday date.'
+        );
+    END IF;
+
+    -- 11. Validate counsellor availability against configured schedules
     SELECT COUNT(*) INTO v_configured_avail_count
     FROM public.counsellor_availability
     WHERE is_active = true AND is_available = true;
 
     IF v_configured_avail_count > 0 THEN
-        -- Check if any active counsellor is scheduled on this day of week
-        SELECT COUNT(DISTINCT ca.counsellor_id) INTO v_total_avail_counsellors
-        FROM public.counsellor_availability ca
-        JOIN public.profiles p ON p.id = ca.counsellor_id
-        WHERE ca.day_of_week = v_dow
-          AND ca.is_available = true
-          AND ca.is_active = true
-          AND p.is_active = true;
-
-        IF v_total_avail_counsellors = 0 THEN
-            RETURN jsonb_build_object(
-                'success', false,
-                'message', 'The institute does not conduct counselling sessions on this day of the week. Please select another date.'
-            );
-        END IF;
-
-        -- Check if any counsellor has an availability window covering this slot
+        -- Check how many active academic counsellors cover this slot on this day (and not on leave)
         SELECT COUNT(DISTINCT ca.counsellor_id) INTO v_total_avail_counsellors
         FROM public.counsellor_availability ca
         JOIN public.profiles p ON p.id = ca.counsellor_id
@@ -1469,47 +1757,38 @@ BEGIN
           AND ca.is_available = true
           AND ca.is_active = true
           AND p.is_active = true
+          AND p.role = 'academic_counsellor'
           AND ca.start_time <= v_slot_start
-          AND ca.end_time >= v_slot_end;
+          AND ca.end_time >= v_slot_end
+          AND NOT EXISTS (
+              SELECT 1 FROM public.counsellor_unavailability cu
+              WHERE cu.counsellor_id = p.id AND cu.unavailable_date = p_preferred_date
+          );
 
         IF v_total_avail_counsellors = 0 THEN
             RETURN jsonb_build_object(
                 'success', false,
-                'message', 'The requested slot (' || p_preferred_time || ') is outside academic counsellor consultation hours.'
+                'message', 'The requested slot (' || v_clean_time_slot || ') is outside academic counsellor consultation hours on ' || p_preferred_date || '.'
             );
         END IF;
 
-        -- Check if all eligible counsellors for this slot are already booked
+        -- Check how many counsellors covering this slot are already booked
         SELECT COUNT(DISTINCT cb.assigned_counsellor_id) INTO v_booked_counsellors
         FROM public.counselling_bookings cb
         WHERE cb.preferred_date = p_preferred_date
-          AND cb.preferred_time = p_preferred_time
+          AND cb.preferred_time = v_clean_time_slot
           AND cb.status IN ('Confirmed', 'Assigned')
           AND cb.assigned_counsellor_id IS NOT NULL;
 
         IF v_booked_counsellors >= v_total_avail_counsellors THEN
             RETURN jsonb_build_object(
                 'success', false,
-                'message', 'All academic counsellors are fully booked for ' || p_preferred_time || ' on ' || p_preferred_date || '. Please choose another slot.'
-            );
-        END IF;
-    ELSE
-        -- Default institute operating schedule fallback (Mon-Sat, 09:00 - 20:30)
-        IF v_dow = 0 THEN
-            RETURN jsonb_build_object(
-                'success', false,
-                'message', 'Counselling sessions are unavailable on Sundays. Please select a Monday to Saturday date.'
-            );
-        END IF;
-        IF v_slot_start < '09:00:00'::TIME OR v_slot_end > '20:30:00'::TIME THEN
-            RETURN jsonb_build_object(
-                'success', false,
-                'message', 'Requested consultation slot must fall within institute operating hours (09:00 AM to 08:30 PM).'
+                'message', 'This time slot was just booked by another student. Please choose an alternate slot.'
             );
         END IF;
     END IF;
 
-    -- 5. Course ID matching
+    -- 12. Canonical Course ID matching
     IF p_course_category ILIKE '%Civil%' OR p_course_category ILIKE '%SSC%' THEN
         v_course_id := 'civil-services-ssc';
     ELSIF p_course_category ILIKE '%Bank%' OR p_course_category ILIKE '%Railway%' THEN
@@ -1518,10 +1797,10 @@ BEGIN
         v_course_id := 'foundation';
     END IF;
 
-    -- 6. Deduplicate / retrieve student record (internal call)
-    v_student_id := public.get_or_create_student(p_full_name, p_phone, p_email);
+    -- 13. Deduplicate / retrieve student record
+    v_student_id := public.get_or_create_student(TRIM(p_full_name), v_clean_phone, v_clean_email);
 
-    -- 7. Check for duplicate active booking by the same student for the same date
+    -- 14. Check for duplicate active booking by the same student on the same date
     IF EXISTS (
         SELECT 1 FROM public.counselling_bookings
         WHERE student_id = v_student_id
@@ -1530,1142 +1809,223 @@ BEGIN
     ) THEN
         RETURN jsonb_build_object(
             'success', false,
-            'message', 'You already have an active counselling appointment or pending request scheduled for ' || p_preferred_date || '. Please choose a different date.'
+            'message', 'You already have an active counselling appointment scheduled for ' || p_preferred_date || '. Please select another date.'
         );
     END IF;
 
-    -- 8. Insert new booking with Pending status
+    -- 15. Generate sequential human-readable booking ID or use sequence
+    BEGIN
+        v_booking_id := 'BK-' || TO_CHAR(NOW(), 'YYYY') || '-' || LPAD(NEXTVAL('public.seq_counselling_booking_id')::TEXT, 5, '0');
+    EXCEPTION WHEN OTHERS THEN
+        SELECT 'BKG-' || TO_CHAR(NOW(), 'YYYYMMDD') || '-' || LPAD((COUNT(*) + 1)::TEXT, 4, '0')
+        INTO v_booking_id
+        FROM public.counselling_bookings
+        WHERE created_at >= DATE_TRUNC('day', NOW());
+    END;
+
+    -- 16. Insert booking record with canonical 'Pending' status and direct student_name
     INSERT INTO public.counselling_bookings (
-        student_id, course_id, course_category, target_examination,
+        id, student_id, student_name, course_id, course_category, target_examination,
         preferred_date, preferred_time, session_medium, status
     ) VALUES (
-        v_student_id, v_course_id, p_course_category, p_target_examination,
-        p_preferred_date, p_preferred_time, p_session_medium, 'Pending'
-    ) RETURNING id INTO v_booking_id;
-
-    -- 9. Trigger Automatic Counsellor Assignment Engine (Matching slot availability, capacity, tie-breaker)
-    v_assigned_counsellor_id := public.auto_assign_counselling_booking(
-        v_booking_id, p_preferred_date, p_preferred_time, p_session_medium
+        v_booking_id, v_student_id, TRIM(p_full_name), v_course_id, p_course_category, p_target_examination,
+        p_preferred_date, v_clean_time_slot, p_session_medium, 'Pending'
     );
 
-    -- Retrieve google_meet_link (will be NULL until Super Admin sets a verified URL)
+    -- 17. Trigger Automatic Academic Counsellor Assignment Engine
+    v_assigned_counsellor_id := public.auto_assign_counselling_booking(
+        v_booking_id, p_preferred_date, v_clean_time_slot, p_session_medium
+    );
+
+    -- Retrieve meet link if set
     SELECT google_meet_link INTO v_generated_meet_link
     FROM public.counselling_bookings
     WHERE id = v_booking_id;
 
-    -- 10. Log administrative activity
-    PERFORM public.internal_log_activity(
-        NULL, 'Public Visitor', 'anonymous',
-        'booking_requested',
-        '1-on-1 strategy call requested by ' || p_full_name || ' for ' || p_preferred_date || ' (' || p_preferred_time || ')',
-        'counselling_booking', v_booking_id,
-        jsonb_build_object('session_medium', p_session_medium, 'course_id', v_course_id, 'assigned_counsellor_id', v_assigned_counsellor_id)
-    );
-
-    -- 11. Create notification outbox entry for async processing
+    -- 18. Queue Notification Event A: Student Booking Confirmation (Strictly Email)
     BEGIN
         INSERT INTO public.notification_outbox (
-            event_type, entity_type, entity_id, priority, scheduled_at, status
+            event_type, entity_type, entity_id, student_id, actor_id, channel, status, scheduled_at, recipient_override, recipient, metadata
         ) VALUES (
-            'booking_confirmation', 'counselling_booking', v_booking_id, 1, NOW(), 'pending'
-        ) RETURNING id INTO v_outbox_id;
+            'booking_submitted',
+            'counselling_booking',
+            v_booking_id,
+            v_student_id,
+            v_assigned_counsellor_id,
+            'email',
+            'pending',
+            NOW(),
+            v_clean_email,
+            v_clean_email,
+            jsonb_build_object(
+                'target', 'student',
+                'booking_id', v_booking_id,
+                'student_name', TRIM(p_full_name),
+                'full_name', TRIM(p_full_name),
+                'email', v_clean_email,
+                'phone', v_clean_phone,
+                'preferred_date', p_preferred_date,
+                'preferred_time', v_clean_time_slot,
+                'course_category', p_course_category,
+                'target_examination', p_target_examination,
+                'session_medium', p_session_medium,
+                'google_meet_link', v_generated_meet_link
+            )
+        ) RETURNING id INTO v_student_outbox_id;
     EXCEPTION WHEN OTHERS THEN
-        -- Non-fatal: outbox failure must not fail the booking submission
-        v_outbox_id := NULL;
+        RAISE WARNING '[submit_counselling_booking] Failed to queue student outbox notification for %: % (SQLSTATE: %)', v_booking_id, SQLERRM, SQLSTATE;
+        v_student_outbox_id := NULL;
     END;
 
+    -- 19. Queue Notification Event B: Counsellor / Institute Alert (Strictly Email)
+    BEGIN
+        INSERT INTO public.notification_outbox (
+            event_type, entity_type, entity_id, student_id, actor_id, channel, status, scheduled_at, recipient_override, recipient, metadata
+        ) VALUES (
+            'booking_counsellor_alert',
+            'counselling_booking',
+            v_booking_id,
+            v_student_id,
+            v_assigned_counsellor_id,
+            'email',
+            'pending',
+            NOW(),
+            v_clean_email,
+            v_clean_email,
+            jsonb_build_object(
+                'target', 'counsellor',
+                'booking_id', v_booking_id,
+                'student_name', TRIM(p_full_name),
+                'full_name', TRIM(p_full_name),
+                'phone', v_clean_phone,
+                'email', v_clean_email,
+                'preferred_date', p_preferred_date,
+                'preferred_time', v_clean_time_slot,
+                'course_category', p_course_category,
+                'target_examination', p_target_examination,
+                'session_medium', p_session_medium,
+                'counsellor_id', v_assigned_counsellor_id
+            )
+        ) RETURNING id INTO v_counsellor_outbox_id;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING '[submit_counselling_booking] Failed to queue counsellor outbox notification for %: % (SQLSTATE: %)', v_booking_id, SQLERRM, SQLSTATE;
+        v_counsellor_outbox_id := NULL;
+    END;
+
+    -- 20. In-App Notification for Super Admin
+    BEGIN
+        INSERT INTO public.notifications (
+            recipient_id, title, message, notification_type, related_record_id
+        )
+        SELECT
+            p.id,
+            'New Counselling Booking Received',
+            'Student ' || TRIM(p_full_name) || ' booked 1-on-1 strategy call for ' || p_preferred_date || ' (' || v_clean_time_slot || ').',
+            'booking_confirmation'::public.notification_type,
+            v_booking_id
+        FROM public.profiles p
+        WHERE p.role = 'super_admin' AND p.is_active = true;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING '[submit_counselling_booking] Failed to queue in-app notification for super admin on booking %: % (SQLSTATE: %)', v_booking_id, SQLERRM, SQLSTATE;
+    END;
+
+    -- 21. Log Administrative Activity
+    BEGIN
+        PERFORM public.internal_log_activity(
+            NULL, TRIM(p_full_name), 'student',
+            'booking_created',
+            'Counselling session booking ' || v_booking_id || ' booked for ' || p_preferred_date || ' (' || v_clean_time_slot || ').',
+            'counselling_booking', v_booking_id,
+            jsonb_build_object(
+                'preferred_date', p_preferred_date,
+                'preferred_time', v_clean_time_slot,
+                'course_category', p_course_category,
+                'assigned_counsellor_id', v_assigned_counsellor_id,
+                'student_outbox_id', v_student_outbox_id,
+                'counsellor_outbox_id', v_counsellor_outbox_id
+            )
+        );
+    EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING '[submit_counselling_booking] Failed to log administrative activity for booking %: % (SQLSTATE: %)', v_booking_id, SQLERRM, SQLSTATE;
+    END;
+
+    -- 22. Return unified snake_case and camelCase response for all client consumers
     RETURN jsonb_build_object(
         'success', true,
         'booking_id', v_booking_id,
-        'assigned', (v_assigned_counsellor_id IS NOT NULL),
+        'bookingId', v_booking_id,
+        'student_id', v_student_id,
+        'studentId', v_student_id,
+        'assigned_counsellor_id', v_assigned_counsellor_id,
+        'assignedCounsellorId', v_assigned_counsellor_id,
         'google_meet_link', v_generated_meet_link,
-        'outbox_id', v_outbox_id,
-        'message', 'Counselling appointment requested successfully.'
+        'googleMeetLink', v_generated_meet_link,
+        'outbox_id', v_student_outbox_id,
+        'outboxId', v_student_outbox_id,
+        'student_outbox_id', v_student_outbox_id,
+        'counsellor_outbox_id', v_counsellor_outbox_id,
+        'message', 'Counselling booking confirmed successfully.'
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.submit_counselling_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.submit_counselling_booking TO anon, authenticated;
-
--- Transactional Reschedule RPC with Strict Authorization & Double-Booking Check
-CREATE OR REPLACE FUNCTION public.reschedule_booking(
-    p_booking_id TEXT,
-    p_new_date DATE,
-    p_new_time TEXT,
-    p_reason TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_booking RECORD;
-    v_conflict_id TEXT;
-    v_user_id UUID;
-    v_user_role public.app_role;
-    v_user_name TEXT;
-    v_today_ist DATE;
-    v_dow INTEGER;
-    v_avail_count INTEGER;
-BEGIN
-    v_user_id := auth.uid();
-    v_user_role := public.current_user_role();
-
-    IF v_user_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Inactive or unauthenticated session.');
-    END IF;
-
-    IF p_reason IS NULL OR LENGTH(TRIM(p_reason)) = 0 THEN
-        RETURN jsonb_build_object('success', false, 'message', 'A valid reason for rescheduling is required.');
-    END IF;
-
-    v_today_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
-    IF p_new_date < v_today_ist THEN
-        RETURN jsonb_build_object('success', false, 'message', 'New appointment date cannot be in the past.');
-    END IF;
-
-    -- Acquire booking row with lock
-    SELECT * INTO v_booking 
-    FROM public.counselling_bookings 
-    WHERE id = p_booking_id
-    FOR UPDATE;
-
-    IF v_booking IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Booking record not found.');
-    END IF;
-
-    -- Strict Authorization Check: Only Super Admin OR the assigned Academic Counsellor can reschedule
-    IF v_user_role != 'super_admin' AND (v_booking.assigned_counsellor_id IS NULL OR v_booking.assigned_counsellor_id != v_user_id) THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You are not authorized to reschedule this session.');
-    END IF;
-
-    SELECT full_name INTO v_user_name FROM public.profiles WHERE id = v_user_id;
-
-    -- If a counsellor is assigned, verify availability on that day of the week
-    IF v_booking.assigned_counsellor_id IS NOT NULL THEN
-        v_dow := EXTRACT(DOW FROM p_new_date)::INTEGER; -- 0=Sun, 6=Sat
-        SELECT COUNT(*) INTO v_avail_count
-        FROM public.counsellor_availability
-        WHERE counsellor_id = v_booking.assigned_counsellor_id
-          AND day_of_week = v_dow
-          AND is_available = true
-          AND is_active = true;
-
-        IF v_avail_count = 0 THEN
-            RETURN jsonb_build_object('success', false, 'message', 'Selected date falls outside the assigned counsellor's configured working days.');
-        END IF;
-
-        -- Double-Booking Prevention: Check conflict against confirmed/assigned sessions
-        SELECT id INTO v_conflict_id
-        FROM public.counselling_bookings
-        WHERE assigned_counsellor_id = v_booking.assigned_counsellor_id
-          AND preferred_date = p_new_date
-          AND preferred_time = p_new_time
-          AND status IN ('Confirmed', 'Assigned')
-          AND id != p_booking_id
-        LIMIT 1;
-
-        IF v_conflict_id IS NOT NULL THEN
-            RETURN jsonb_build_object(
-                'success', false,
-                'message', 'Conflict detected: The assigned counsellor already has an active appointment (' || v_conflict_id || ') scheduled at this time slot.'
-            );
-        END IF;
-    END IF;
-
-    -- Record Audit Trail in Reschedule History
-    INSERT INTO public.booking_reschedule_history (
-        booking_id, rescheduled_by, previous_date, previous_time, new_date, new_time, reason
-    ) VALUES (
-        p_booking_id, v_user_id, v_booking.preferred_date, v_booking.preferred_time, p_new_date, p_new_time, TRIM(p_reason)
-    );
-
-    -- Update Booking Record
-    UPDATE public.counselling_bookings
-    SET preferred_date = p_new_date,
-        preferred_time = p_new_time,
-        updated_at = NOW()
-    WHERE id = p_booking_id;
-
-    -- Log Administrative Activity
-    PERFORM public.internal_log_activity(
-        v_user_id, COALESCE(v_user_name, 'Staff Member'), v_user_role::TEXT,
-        'session_rescheduled',
-        'Booking #' || p_booking_id || ' moved from ' || v_booking.preferred_date || ' to ' || p_new_date || ' (' || p_new_time || '). Reason: ' || p_reason,
-        'counselling_booking', p_booking_id,
-        jsonb_build_object('previous_date', v_booking.preferred_date, 'new_date', p_new_date, 'reason', p_reason)
-    );
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'booking_id', p_booking_id,
-        'new_date', p_new_date,
-        'new_time', p_new_time,
-        'message', 'Counselling appointment rescheduled successfully.'
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.reschedule_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reschedule_booking TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.submit_counselling_booking(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.submit_counselling_booking(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, TEXT) TO anon, authenticated, service_role;
 
 
--- =============================================================================
--- 16B. ADMIN DASHBOARD SUPPORT RPCs
--- Role-restricted operations that replace AdminData mock layer
--- =============================================================================
-
--- Get dashboard statistics filtered by caller role
-CREATE OR REPLACE FUNCTION public.get_dashboard_stats()
+-- ── DASHBOARD BOOKINGS RPC ───────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_dashboard_bookings(p_limit INTEGER DEFAULT 50, p_offset INTEGER DEFAULT 0)
 RETURNS JSONB AS $$
 DECLARE
     v_role public.app_role;
     v_uid UUID;
     v_result JSONB;
 BEGIN
+    v_uid := auth.uid();
     v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
     IF v_role IS NULL THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
     END IF;
 
-    IF v_role = 'super_admin' THEN
+    IF v_role = 'super_admin' OR v_role = 'academic_counsellor' THEN
         SELECT jsonb_build_object(
             'success', true,
-            'total_enquiries',    (SELECT COUNT(*) FROM public.admission_enquiries),
-            'pending_enquiries',  (SELECT COUNT(*) FROM public.admission_enquiries WHERE status = 'New'),
-            'total_bookings',     (SELECT COUNT(*) FROM public.counselling_bookings),
-            'pending_bookings',   (SELECT COUNT(*) FROM public.counselling_bookings WHERE status = 'Pending'),
-            'confirmed_bookings', (SELECT COUNT(*) FROM public.counselling_bookings WHERE status = 'Confirmed'),
-            'active_counsellors', (SELECT COUNT(*) FROM public.profiles WHERE is_active = true AND role != 'super_admin'),
-            'today_followups',    (SELECT COUNT(*) FROM public.follow_ups WHERE status = 'pending' AND follow_up_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE),
-            'conversion_rate',    ROUND(
-                CASE WHEN (SELECT COUNT(*) FROM public.admission_enquiries) = 0 THEN 0
-                     ELSE (SELECT COUNT(*) FROM public.admission_enquiries WHERE status = 'Converted')::NUMERIC * 100 /
-                          (SELECT COUNT(*) FROM public.admission_enquiries)::NUMERIC
-                END, 1
-            )
-        ) INTO v_result;
-    ELSIF v_role = 'admission_counsellor' THEN
-        SELECT jsonb_build_object(
-            'success', true,
-            'my_enquiries',        (SELECT COUNT(*) FROM public.admission_enquiries WHERE assigned_counsellor_id = v_uid),
-            'active_enquiries',    (SELECT COUNT(*) FROM public.admission_enquiries WHERE assigned_counsellor_id = v_uid AND status NOT IN ('Converted', 'Not Interested')),
-            'today_followups',     (SELECT COUNT(*) FROM public.follow_ups WHERE assigned_to = v_uid AND status = 'pending' AND follow_up_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE),
-            'converted_this_month',(SELECT COUNT(*) FROM public.admission_enquiries WHERE assigned_counsellor_id = v_uid AND status = 'Converted' AND (updated_at AT TIME ZONE 'Asia/Kolkata')::DATE >= date_trunc('month', (NOW() AT TIME ZONE 'Asia/Kolkata'))::DATE)
-        ) INTO v_result;
-    ELSIF v_role = 'academic_counsellor' THEN
-        SELECT jsonb_build_object(
-            'success', true,
-            'my_bookings',         (SELECT COUNT(*) FROM public.counselling_bookings WHERE assigned_counsellor_id = v_uid),
-            'upcoming_sessions',   (SELECT COUNT(*) FROM public.counselling_bookings WHERE assigned_counsellor_id = v_uid AND status IN ('Assigned', 'Confirmed') AND preferred_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE),
-            'today_sessions',      (SELECT COUNT(*) FROM public.counselling_bookings WHERE assigned_counsellor_id = v_uid AND preferred_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE AND status IN ('Assigned', 'Confirmed')),
-            'completed_sessions',  (SELECT COUNT(*) FROM public.counselling_bookings WHERE assigned_counsellor_id = v_uid AND status = 'Completed'),
-            'today_followups',     (SELECT COUNT(*) FROM public.follow_ups WHERE assigned_to = v_uid AND status = 'pending' AND follow_up_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE)
-        ) INTO v_result;
+            'data', COALESCE(jsonb_agg(row_to_json(bq) ORDER BY bq.created_at DESC), '[]'::jsonb)
+        ) INTO v_result
+        FROM (
+            SELECT b.id,
+                   b.student_id,
+                   COALESCE(NULLIF(TRIM(b.student_name), ''), s.full_name, 'Student Aspirant') AS student_name,
+                   s.phone,
+                   s.email,
+                   b.course_id,
+                   b.course_category,
+                   b.target_examination,
+                   b.preferred_date,
+                   b.preferred_time,
+                   b.session_medium,
+                   b.google_meet_link,
+                   b.status::TEXT,
+                   b.counselling_notes,
+                   b.assigned_counsellor_id,
+                   p.full_name AS counsellor_name,
+                   b.created_at,
+                   b.updated_at
+            FROM public.counselling_bookings b
+            JOIN public.students s ON s.id = b.student_id
+            LEFT JOIN public.profiles p ON p.id = b.assigned_counsellor_id
+            WHERE v_role = 'super_admin' OR b.assigned_counsellor_id = v_uid
+            ORDER BY b.created_at DESC
+            LIMIT p_limit OFFSET p_offset
+        ) bq;
+    ELSE
+        v_result := jsonb_build_object('success', true, 'data', '[]'::jsonb);
     END IF;
 
     RETURN v_result;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.get_dashboard_stats FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_dashboard_stats TO authenticated;
-
-
--- Update enquiry status (role-restricted)
-CREATE OR REPLACE FUNCTION public.update_enquiry_status(
-    p_enquiry_id TEXT,
-    p_new_status public.enquiry_status
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role public.app_role;
-    v_uid UUID;
-    v_enquiry RECORD;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    SELECT * INTO v_enquiry FROM public.admission_enquiries WHERE id = p_enquiry_id;
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Enquiry not found');
-    END IF;
-
-    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id != v_uid THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only update enquiries assigned to you.');
-    END IF;
-
-    IF v_role = 'academic_counsellor' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: Academic counsellors cannot update admission enquiry status.');
-    END IF;
-
-    UPDATE public.admission_enquiries
-    SET status = p_new_status, updated_at = NOW()
-    WHERE id = p_enquiry_id;
-
-    PERFORM public.internal_log_activity(
-        v_uid, (SELECT full_name FROM public.profiles WHERE id = v_uid), v_role::TEXT,
-        'enquiry_status_updated',
-        'Enquiry ' || p_enquiry_id || ' status updated to ' || p_new_status,
-        'admission_enquiry', p_enquiry_id,
-        jsonb_build_object('new_status', p_new_status, 'previous_status', v_enquiry.status)
-    );
-
-    RETURN jsonb_build_object('success', true, 'message', 'Enquiry status updated to ' || p_new_status);
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.update_enquiry_status FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_enquiry_status TO authenticated;
-
-
--- Update booking status (role-restricted)
-CREATE OR REPLACE FUNCTION public.update_booking_status(
-    p_booking_id TEXT,
-    p_new_status public.booking_status
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role public.app_role;
-    v_uid UUID;
-    v_booking RECORD;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    SELECT * INTO v_booking FROM public.counselling_bookings WHERE id = p_booking_id;
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Booking not found');
-    END IF;
-
-    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id != v_uid THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only update bookings assigned to you.');
-    END IF;
-
-    IF v_role = 'admission_counsellor' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: Admission counsellors cannot update counselling booking status.');
-    END IF;
-
-    UPDATE public.counselling_bookings
-    SET status = p_new_status, updated_at = NOW()
-    WHERE id = p_booking_id;
-
-    PERFORM public.internal_log_activity(
-        v_uid, (SELECT full_name FROM public.profiles WHERE id = v_uid), v_role::TEXT,
-        'booking_status_updated',
-        'Booking ' || p_booking_id || ' status updated to ' || p_new_status,
-        'counselling_booking', p_booking_id,
-        jsonb_build_object('new_status', p_new_status, 'previous_status', v_booking.status)
-    );
-
-    RETURN jsonb_build_object('success', true, 'message', 'Booking status updated to ' || p_new_status);
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.update_booking_status FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_booking_status TO authenticated;
-
-
--- Add an internal note to an enquiry (authenticated staff only)
-CREATE OR REPLACE FUNCTION public.add_enquiry_note(
-    p_enquiry_id TEXT,
-    p_note_text  TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role      public.app_role;
-    v_uid       UUID;
-    v_author_name TEXT;
-    v_enquiry   RECORD;
-    v_note_id   UUID;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    IF p_note_text IS NULL OR LENGTH(TRIM(p_note_text)) = 0 THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Note text cannot be empty.');
-    END IF;
-
-    SELECT * INTO v_enquiry FROM public.admission_enquiries WHERE id = p_enquiry_id;
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Enquiry not found.');
-    END IF;
-
-    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id != v_uid THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only add notes to enquiries assigned to you.');
-    END IF;
-
-    IF v_role = 'academic_counsellor' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: Academic counsellors cannot add notes to admission enquiries.');
-    END IF;
-
-    SELECT full_name INTO v_author_name FROM public.profiles WHERE id = v_uid;
-
-    INSERT INTO public.enquiry_notes (enquiry_id, author_id, author_name, note_text)
-    VALUES (p_enquiry_id, v_uid, COALESCE(v_author_name, 'Staff Member'), TRIM(p_note_text))
-    RETURNING id INTO v_note_id;
-
-    RETURN jsonb_build_object('success', true, 'note_id', v_note_id, 'message', 'Note added successfully.');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.add_enquiry_note FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.add_enquiry_note TO authenticated;
-
-
--- Add an internal note to a counselling booking (authenticated staff only)
-CREATE OR REPLACE FUNCTION public.add_booking_note(
-    p_booking_id TEXT,
-    p_note_text  TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role      public.app_role;
-    v_uid       UUID;
-    v_author_name TEXT;
-    v_booking   RECORD;
-    v_note_id   UUID;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    IF p_note_text IS NULL OR LENGTH(TRIM(p_note_text)) = 0 THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Note text cannot be empty.');
-    END IF;
-
-    SELECT * INTO v_booking FROM public.counselling_bookings WHERE id = p_booking_id;
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Booking not found.');
-    END IF;
-
-    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id != v_uid THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only add notes to bookings assigned to you.');
-    END IF;
-
-    IF v_role = 'admission_counsellor' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: Admission counsellors cannot add notes to counselling bookings.');
-    END IF;
-
-    SELECT full_name INTO v_author_name FROM public.profiles WHERE id = v_uid;
-
-    INSERT INTO public.booking_notes (booking_id, author_id, author_name, note_text)
-    VALUES (p_booking_id, v_uid, COALESCE(v_author_name, 'Staff Member'), TRIM(p_note_text))
-    RETURNING id INTO v_note_id;
-
-    RETURN jsonb_build_object('success', true, 'note_id', v_note_id, 'message', 'Note added successfully.');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.add_booking_note FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.add_booking_note TO authenticated;
-
-
--- Create a follow-up task (authenticated staff only)
-CREATE OR REPLACE FUNCTION public.create_follow_up(
-    p_student_id  UUID,
-    p_enquiry_id  TEXT DEFAULT NULL,
-    p_booking_id  TEXT DEFAULT NULL,
-    p_follow_up_date DATE DEFAULT NULL,
-    p_follow_up_time TEXT DEFAULT NULL,
-    p_follow_up_type TEXT DEFAULT 'phone_call',
-    p_notes       TEXT DEFAULT NULL
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role   public.app_role;
-    v_uid    UUID;
-    v_fup_id UUID;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    IF p_follow_up_date IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Follow-up date is required.');
-    END IF;
-
-    IF p_enquiry_id IS NOT NULL AND v_role = 'admission_counsellor' THEN
-        IF NOT EXISTS (SELECT 1 FROM public.admission_enquiries WHERE id = p_enquiry_id AND assigned_counsellor_id = v_uid) THEN
-            RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only create follow-ups for enquiries assigned to you.');
-        END IF;
-    END IF;
-
-    IF p_booking_id IS NOT NULL AND v_role = 'academic_counsellor' THEN
-        IF NOT EXISTS (SELECT 1 FROM public.counselling_bookings WHERE id = p_booking_id AND assigned_counsellor_id = v_uid) THEN
-            RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only create follow-ups for bookings assigned to you.');
-        END IF;
-    END IF;
-
-    INSERT INTO public.follow_ups (
-        student_id, enquiry_id, booking_id,
-        assigned_to, follow_up_date, follow_up_time,
-        follow_up_type, notes, status
-    ) VALUES (
-        p_student_id, p_enquiry_id, p_booking_id,
-        v_uid, p_follow_up_date, p_follow_up_time,
-        p_follow_up_type, p_notes, 'pending'
-    ) RETURNING id INTO v_fup_id;
-
-    RETURN jsonb_build_object('success', true, 'follow_up_id', v_fup_id, 'message', 'Follow-up scheduled successfully.');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.create_follow_up FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.create_follow_up TO authenticated;
-
-
--- Complete a follow-up (authenticated staff only)
-CREATE OR REPLACE FUNCTION public.complete_follow_up(
-    p_follow_up_id UUID,
-    p_outcome_notes TEXT DEFAULT NULL
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role   public.app_role;
-    v_uid    UUID;
-    v_fup    RECORD;
-BEGIN
-    v_role := public.current_user_role();
-    v_uid  := auth.uid();
-
-    IF v_role IS NULL THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
-    END IF;
-
-    SELECT * INTO v_fup FROM public.follow_ups WHERE id = p_follow_up_id;
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Follow-up not found.');
-    END IF;
-
-    IF v_role != 'super_admin' AND v_fup.assigned_to != v_uid THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only complete follow-ups assigned to you.');
-    END IF;
-
-    UPDATE public.follow_ups
-    SET status = 'completed',
-        completed_at = NOW(),
-        notes = CASE WHEN p_outcome_notes IS NOT NULL
-                     THEN COALESCE(notes, '') || E'\n[Outcome] ' || p_outcome_notes
-                     ELSE notes END,
-        updated_at = NOW()
-    WHERE id = p_follow_up_id;
-
-    RETURN jsonb_build_object('success', true, 'message', 'Follow-up marked as completed.');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.complete_follow_up FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.complete_follow_up TO authenticated;
-
-
--- Set Google Meet link for a booking (Super Admin only)
-CREATE OR REPLACE FUNCTION public.set_booking_meet_link(
-    p_booking_id  TEXT,
-    p_meet_link   TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_role public.app_role;
-BEGIN
-    v_role := public.current_user_role();
-
-    IF v_role != 'super_admin' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Admins can set Google Meet links.');
-    END IF;
-
-    IF p_meet_link IS NOT NULL AND p_meet_link !~* '^https?://meet\.google\.com/' THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Invalid Google Meet URL. Must begin with https://meet.google.com/');
-    END IF;
-
-    UPDATE public.counselling_bookings
-    SET google_meet_link = p_meet_link, updated_at = NOW()
-    WHERE id = p_booking_id;
-
-    IF NOT FOUND THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Booking not found.');
-    END IF;
-
-    RETURN jsonb_build_object('success', true, 'message', 'Google Meet link updated successfully.');
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.set_booking_meet_link FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.set_booking_meet_link TO authenticated;
-
-
--- Get available booking slots for a given date (PUBLIC safe — returns slot labels only, no PII)
-CREATE OR REPLACE FUNCTION public.get_available_booking_slots(p_date DATE)
-RETURNS JSONB AS $$
-DECLARE
-    v_dow INTEGER;
-    v_today_ist DATE;
-    v_avail_count INTEGER;
-    v_slots JSONB;
-BEGIN
-    v_today_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
-
-    IF p_date < v_today_ist THEN
-        RETURN jsonb_build_object('success', false, 'message', 'Date cannot be in the past.', 'slots', '[]'::jsonb);
-    END IF;
-
-    v_dow := EXTRACT(DOW FROM p_date)::INTEGER;
-
-    SELECT COUNT(*) INTO v_avail_count
-    FROM public.counsellor_availability ca
-    JOIN public.profiles p ON p.id = ca.counsellor_id
-    WHERE ca.day_of_week = v_dow
-      AND ca.is_available = true
-      AND ca.is_active = true
-      AND p.is_active = true
-      AND p.role = 'academic_counsellor';
-
-    IF v_avail_count = 0 THEN
-        RETURN jsonb_build_object(
-            'success', true,
-            'date', p_date,
-            'day_available', false,
-            'message', 'No counsellor availability configured for this day.',
-            'slots', '[]'::jsonb
-        );
-    END IF;
-
-    SELECT jsonb_agg(slot_label ORDER BY slot_start) INTO v_slots
-    FROM (
-        SELECT DISTINCT
-            TO_CHAR(ca.start_time, 'HH12:MI AM') || ' - ' || TO_CHAR(ca.end_time, 'HH12:MI AM') AS slot_label,
-            ca.start_time AS slot_start
-        FROM public.counsellor_availability ca
-        JOIN public.profiles p ON p.id = ca.counsellor_id
-        WHERE ca.day_of_week = v_dow
-          AND ca.is_available = true
-          AND ca.is_active = true
-          AND p.is_active = true
-          AND p.role = 'academic_counsellor'
-          AND (
-              SELECT COUNT(DISTINCT p2.id)
-              FROM public.profiles p2
-              JOIN public.counsellor_availability ca2 ON ca2.counsellor_id = p2.id
-              WHERE p2.is_active = true
-                AND p2.role = 'academic_counsellor'
-                AND ca2.day_of_week = v_dow
-                AND ca2.is_available = true
-                AND ca2.is_active = true
-                AND ca2.start_time = ca.start_time
-                AND ca2.end_time = ca.end_time
-                AND NOT EXISTS (
-                    SELECT 1 FROM public.counselling_bookings cb
-                    WHERE cb.assigned_counsellor_id = p2.id
-                      AND cb.preferred_date = p_date
-                      AND cb.preferred_time = TO_CHAR(ca.start_time, 'HH12:MI AM') || ' - ' || TO_CHAR(ca.end_time, 'HH12:MI AM')
-                      AND cb.status IN ('Confirmed', 'Assigned')
-                )
-          ) > 0
-    ) available_slots;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'date', p_date,
-        'day_available', true,
-        'slots', COALESCE(v_slots, '[]'::jsonb)
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp;
-
-REVOKE EXECUTE ON FUNCTION public.get_available_booking_slots FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_available_booking_slots TO anon, authenticated;
-
--- =============================================================================
--- 17. SEED CORE DATA (Courses & Sample Batches)
--- =============================================================================
-INSERT INTO public.courses (id, name, category, description, examination_list, base_fee, is_active)
-VALUES
-(
-    'civil-services-ssc',
-    'Civil Services & SSC Examination Preparation',
-    'Administrative & Civil Services',
-    'Comprehensive multi-tier classroom and digital training for UPSC CSE, State PCS, and SSC CGL.',
-    ARRAY['UPSC Civil Services Examination (CSE)', 'State Public Service Commission (State PCS)', 'SSC CGL (Combined Graduate Level)', 'SSC CHSL (Combined Higher Secondary)', 'SSC GD (General Duty Constable)', 'SSC MTS (Multi-Tasking Staff)', 'State Subordinate & Administrative Exams'],
-    45000.00,
-    true
-),
-(
-    'banking-railway',
-    'Banking & Railway Examination Preparation',
-    'Financial & Railway Services',
-    'Rigorous quantitative aptitude, reasoning, and exam simulation for IBPS PO, Clerk, SBI, and RRB NTPC.',
-    ARRAY['IBPS PO (Probationary Officer)', 'IBPS Clerk (Clerical Cadre)', 'SBI PO (State Bank of India)', 'SBI Clerk (Junior Associate)', 'IBPS RRB (Gramin Bank Officer & Assistant)', 'RBI Grade B Officer & Assistant', 'RRB NTPC (Non-Technical Popular Categories)', 'RRB Group D & ALP (Assistant Loco Pilot)'],
-    32000.00,
-    true
-),
-(
-    'foundation',
-    'APEX Foundation Program',
-    'Integrated Beginner Foundation',
-    '360-degree foundational mastery in General Studies, Quantitative Aptitude, Logical Reasoning, and English.',
-    ARRAY['All-Govt Exam Beginner Foundation (SSC, Bank, Railway)', 'College Students Long-Term Integrated Foundation (2-Year)', 'NCERT Comprehensive Foundation (UPSC & State PCS)', 'CSAT & General Mental Ability Foundation'],
-    28000.00,
-    true
-)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO public.batches (course_id, batch_name, start_date, timing_slot, learning_mode, fee_amount, seat_capacity, enrolled_count, is_admission_open)
-VALUES
-('civil-services-ssc', 'UPSC CSE 2027 Comprehensive Prelims-cum-Mains Super-50', '2026-11-20', '08:00 AM – 11:00 AM (Morning)', 'Offline Classroom (Delhi Flagship Campus)', 45000.00, 50, 38, true),
-('civil-services-ssc', 'SSC CGL Tier-I & II Target Crash Batch', '2026-11-15', '04:00 PM – 07:00 PM (Evening)', 'Hybrid (Classroom + HD Live Stream)', 28000.00, 60, 47, true),
-('banking-railway', 'IBPS & SBI PO 2027 High-Velocity Preparation Cohort', '2026-11-18', '09:30 AM – 12:30 PM (Morning)', 'Offline Classroom (Delhi Flagship Campus)', 32000.00, 45, 31, true),
-('foundation', 'Apex All-Govt Beginner Foundation Mastermind (Annual)', '2026-11-25', '10:00 AM – 01:00 PM (Regular)', 'Offline Classroom (Delhi Flagship Campus)', 28000.00, 40, 26, true)
-ON CONFLICT (course_id, batch_name) DO NOTHING;
-
--- =============================================================================
--- 18. STRICT ZERO-TRUST ROW LEVEL SECURITY (RLS) POLICIES
--- Retry-Safe: Each policy is preceded by DROP POLICY IF EXISTS
--- =============================================================================
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.batches ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.admission_enquiries ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.counselling_bookings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.booking_reschedule_history ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.enquiry_notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.booking_notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.follow_ups ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.counsellor_availability ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.tutorial_progress ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
-
--- ── 1. PROFILES POLICIES ─────────────────────────────────────────────────────
-DROP POLICY IF EXISTS "Super Admin manage all profiles" ON public.profiles;
-CREATE POLICY "Super Admin manage all profiles"
-ON public.profiles FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Staff view own profile" ON public.profiles;
-CREATE POLICY "Staff view own profile"
-ON public.profiles FOR SELECT
-TO authenticated
-USING (id = auth.uid() AND public.current_user_role() IS NOT NULL);
-
-DROP POLICY IF EXISTS "Staff update own profile" ON public.profiles;
-CREATE POLICY "Staff update own profile"
-ON public.profiles FOR UPDATE
-TO authenticated
-USING (id = auth.uid() AND public.current_user_role() IS NOT NULL)
-WITH CHECK (id = auth.uid());
-
--- ── 2. COURSES & BATCHES POLICIES ───────────────────────────────────────────
-DROP POLICY IF EXISTS "Public view active courses" ON public.courses;
-CREATE POLICY "Public view active courses"
-ON public.courses FOR SELECT
-USING (is_active = true OR public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Super Admin manage courses" ON public.courses;
-CREATE POLICY "Super Admin manage courses"
-ON public.courses FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Public view open batches" ON public.batches;
-CREATE POLICY "Public view open batches"
-ON public.batches FOR SELECT
-USING (is_admission_open = true OR public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Super Admin manage batches" ON public.batches;
-CREATE POLICY "Super Admin manage batches"
-ON public.batches FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
--- ── 3. ADMISSION ENQUIRIES POLICIES ─────────────────────────────────────────
-DROP POLICY IF EXISTS "Super Admin manage all enquiries" ON public.admission_enquiries;
-CREATE POLICY "Super Admin manage all enquiries"
-ON public.admission_enquiries FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Admission Counsellors view assigned enquiries" ON public.admission_enquiries;
-CREATE POLICY "Admission Counsellors view assigned enquiries"
-ON public.admission_enquiries FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'admission_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-);
-
-DROP POLICY IF EXISTS "Admission Counsellors update assigned enquiries" ON public.admission_enquiries;
-CREATE POLICY "Admission Counsellors update assigned enquiries"
-ON public.admission_enquiries FOR UPDATE
-TO authenticated
-USING (
-    public.current_user_role() = 'admission_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-)
-WITH CHECK (
-    public.current_user_role() = 'admission_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-);
-
--- ── 4. COUNSELLING BOOKINGS POLICIES ────────────────────────────────────────
-DROP POLICY IF EXISTS "Super Admin manage all bookings" ON public.counselling_bookings;
-CREATE POLICY "Super Admin manage all bookings"
-ON public.counselling_bookings FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Academic Counsellors view assigned bookings" ON public.counselling_bookings;
-CREATE POLICY "Academic Counsellors view assigned bookings"
-ON public.counselling_bookings FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'academic_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-);
-
-DROP POLICY IF EXISTS "Academic Counsellors update assigned bookings" ON public.counselling_bookings;
-CREATE POLICY "Academic Counsellors update assigned bookings"
-ON public.counselling_bookings FOR UPDATE
-TO authenticated
-USING (
-    public.current_user_role() = 'academic_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-)
-WITH CHECK (
-    public.current_user_role() = 'academic_counsellor'
-    AND assigned_counsellor_id = auth.uid()
-);
-
--- ── 5. STUDENTS TABLE POLICIES ──────────────────────────────────────────────
-DROP POLICY IF EXISTS "Super Admin manage all students" ON public.students;
-CREATE POLICY "Super Admin manage all students"
-ON public.students FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Counsellors view assigned students" ON public.students;
-CREATE POLICY "Counsellors view assigned students"
-ON public.students FOR SELECT
-TO authenticated
-USING (
-    (public.current_user_role() = 'admission_counsellor' AND EXISTS (
-        SELECT 1 FROM public.admission_enquiries e WHERE e.student_id = students.id AND e.assigned_counsellor_id = auth.uid()
-    ))
-    OR
-    (public.current_user_role() = 'academic_counsellor' AND EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.student_id = students.id AND b.assigned_counsellor_id = auth.uid()
-    ))
-);
-
-DROP POLICY IF EXISTS "Counsellors update assigned students" ON public.students;
-CREATE POLICY "Counsellors update assigned students"
-ON public.students FOR UPDATE
-TO authenticated
-USING (
-    (public.current_user_role() = 'admission_counsellor' AND EXISTS (
-        SELECT 1 FROM public.admission_enquiries e WHERE e.student_id = students.id AND e.assigned_counsellor_id = auth.uid()
-    ))
-    OR
-    (public.current_user_role() = 'academic_counsellor' AND EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.student_id = students.id AND b.assigned_counsellor_id = auth.uid()
-    ))
-)
-WITH CHECK (
-    (public.current_user_role() = 'admission_counsellor' AND EXISTS (
-        SELECT 1 FROM public.admission_enquiries e WHERE e.student_id = students.id AND e.assigned_counsellor_id = auth.uid()
-    ))
-    OR
-    (public.current_user_role() = 'academic_counsellor' AND EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.student_id = students.id AND b.assigned_counsellor_id = auth.uid()
-    ))
-);
-
--- ── 6. ENQUIRY NOTES POLICIES (Author Spoofing Prevention) ──────────────────
-DROP POLICY IF EXISTS "Staff view permitted enquiry notes" ON public.enquiry_notes;
-CREATE POLICY "Staff view permitted enquiry notes"
-ON public.enquiry_notes FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR EXISTS (
-        SELECT 1 FROM public.admission_enquiries e WHERE e.id = enquiry_notes.enquiry_id AND e.assigned_counsellor_id = auth.uid()
-    )
-);
-
-DROP POLICY IF EXISTS "Staff insert enquiry notes" ON public.enquiry_notes;
-CREATE POLICY "Staff insert enquiry notes"
-ON public.enquiry_notes FOR INSERT
-TO authenticated
-WITH CHECK (
-    author_id = auth.uid() 
-    AND (
-        public.current_user_role() = 'super_admin'
-        OR EXISTS (
-            SELECT 1 FROM public.admission_enquiries e WHERE e.id = enquiry_id AND e.assigned_counsellor_id = auth.uid()
-        )
-    )
-);
-
-DROP POLICY IF EXISTS "Staff update own enquiry notes" ON public.enquiry_notes;
-CREATE POLICY "Staff update own enquiry notes"
-ON public.enquiry_notes FOR UPDATE
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR (author_id = auth.uid() AND EXISTS (
-        SELECT 1 FROM public.admission_enquiries e WHERE e.id = enquiry_notes.enquiry_id AND e.assigned_counsellor_id = auth.uid()
-    ))
-)
-WITH CHECK (
-    author_id = auth.uid()
-);
-
--- ── 7. BOOKING NOTES POLICIES (Author Spoofing Prevention) ──────────────────
-DROP POLICY IF EXISTS "Staff view permitted booking notes" ON public.booking_notes;
-CREATE POLICY "Staff view permitted booking notes"
-ON public.booking_notes FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.id = booking_notes.booking_id AND b.assigned_counsellor_id = auth.uid()
-    )
-);
-
-DROP POLICY IF EXISTS "Staff insert booking notes" ON public.booking_notes;
-CREATE POLICY "Staff insert booking notes"
-ON public.booking_notes FOR INSERT
-TO authenticated
-WITH CHECK (
-    author_id = auth.uid() 
-    AND (
-        public.current_user_role() = 'super_admin'
-        OR EXISTS (
-            SELECT 1 FROM public.counselling_bookings b WHERE b.id = booking_id AND b.assigned_counsellor_id = auth.uid()
-        )
-    )
-);
-
-DROP POLICY IF EXISTS "Staff update own booking notes" ON public.booking_notes;
-CREATE POLICY "Staff update own booking notes"
-ON public.booking_notes FOR UPDATE
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR (author_id = auth.uid() AND EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.id = booking_notes.booking_id AND b.assigned_counsellor_id = auth.uid()
-    ))
-)
-WITH CHECK (
-    author_id = auth.uid()
-);
-
--- ── 8. BOOKING RESCHEDULE HISTORY POLICIES ──────────────────────────────────
-DROP POLICY IF EXISTS "Staff view permitted reschedule history" ON public.booking_reschedule_history;
-CREATE POLICY "Staff view permitted reschedule history"
-ON public.booking_reschedule_history FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR EXISTS (
-        SELECT 1 FROM public.counselling_bookings b WHERE b.id = booking_reschedule_history.booking_id AND b.assigned_counsellor_id = auth.uid()
-    )
-);
-
--- ── 9. FOLLOW-UPS POLICIES (Ownership & Parent Enforced) ────────────────────
-DROP POLICY IF EXISTS "Staff view permitted follow-ups" ON public.follow_ups;
-CREATE POLICY "Staff view permitted follow-ups"
-ON public.follow_ups FOR SELECT
-TO authenticated
-USING (
-    public.current_user_role() = 'super_admin'
-    OR assigned_to = auth.uid()
-);
-
-DROP POLICY IF EXISTS "Staff insert follow-ups" ON public.follow_ups;
-CREATE POLICY "Staff insert follow-ups"
-ON public.follow_ups FOR INSERT
-TO authenticated
-WITH CHECK (
-    (public.current_user_role() = 'super_admin' AND assigned_to IS NOT NULL)
-    OR
-    (assigned_to = auth.uid() AND (
-        (enquiry_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.admission_enquiries WHERE id = enquiry_id AND assigned_counsellor_id = auth.uid()))
-        OR
-        (booking_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.counselling_bookings WHERE id = booking_id AND assigned_counsellor_id = auth.uid()))
-    ))
-);
-
-DROP POLICY IF EXISTS "Staff update assigned follow-ups" ON public.follow_ups;
-CREATE POLICY "Staff update assigned follow-ups"
-ON public.follow_ups FOR UPDATE
-TO authenticated
-USING (public.current_user_role() = 'super_admin' OR assigned_to = auth.uid())
-WITH CHECK (public.current_user_role() = 'super_admin' OR assigned_to = auth.uid());
-
--- ── 10. COUNSELLOR AVAILABILITY POLICIES ────────────────────────────────────
-DROP POLICY IF EXISTS "Public view active available slots" ON public.counsellor_availability;
-CREATE POLICY "Public view active available slots"
-ON public.counsellor_availability FOR SELECT
-USING (is_active = true AND is_available = true);
-
-DROP POLICY IF EXISTS "Staff view all active availability" ON public.counsellor_availability;
-CREATE POLICY "Staff view all active availability"
-ON public.counsellor_availability FOR SELECT
-TO authenticated
-USING (public.current_user_role() IS NOT NULL);
-
-DROP POLICY IF EXISTS "Super Admin manage all availability" ON public.counsellor_availability;
-CREATE POLICY "Super Admin manage all availability"
-ON public.counsellor_availability FOR ALL
-TO authenticated
-USING (public.current_user_role() = 'super_admin')
-WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "Counsellors manage own availability" ON public.counsellor_availability;
-CREATE POLICY "Counsellors manage own availability"
-ON public.counsellor_availability FOR ALL
-TO authenticated
-USING (counsellor_id = auth.uid() AND public.current_user_role() IS NOT NULL)
-WITH CHECK (counsellor_id = auth.uid() AND public.current_user_role() IS NOT NULL);
-
--- ── 11. IN-APP NOTIFICATIONS POLICIES ───────────────────────────────────────
-DROP POLICY IF EXISTS "Users access own notifications" ON public.notifications;
-CREATE POLICY "Users access own notifications"
-ON public.notifications FOR ALL
-TO authenticated
-USING (recipient_id = auth.uid())
-WITH CHECK (recipient_id = auth.uid());
-
--- ── 12. TUTORIAL PROGRESS POLICIES ──────────────────────────────────────────
-DROP POLICY IF EXISTS "Users access own tutorial progress" ON public.tutorial_progress;
-CREATE POLICY "Users access own tutorial progress"
-ON public.tutorial_progress FOR ALL
-TO authenticated
-USING (user_id = auth.uid())
-WITH CHECK (user_id = auth.uid());
-
--- ── 13. IMMUTABLE ACTIVITY LOGS POLICIES ────────────────────────────────────
-DROP POLICY IF EXISTS "Super Admin view activity logs" ON public.activity_logs;
-CREATE POLICY "Super Admin view activity logs"
-ON public.activity_logs FOR SELECT
-TO authenticated
-USING (public.current_user_role() = 'super_admin');
-
--- (No client-side INSERT/UPDATE/DELETE policy: Activity logs are strictly generated server-side)
-
--- =============================================================================
--- 19. REALTIME PUBLICATION CONFIGURATION
--- =============================================================================
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_publication_tables 
-        WHERE pubname = 'supabase_realtime' AND tablename = 'notifications'
-    ) THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
-    END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_publication_tables 
-        WHERE pubname = 'supabase_realtime' AND tablename = 'admission_enquiries'
-    ) THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE public.admission_enquiries;
-    END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_publication_tables 
-        WHERE pubname = 'supabase_realtime' AND tablename = 'counselling_bookings'
-    ) THEN
-        ALTER PUBLICATION supabase_realtime ADD TABLE public.counselling_bookings;
-    END IF;
-END $$;
-
-
--- ── NOTIFICATION OUTBOX POLICIES ────────────────────────────────────────────────────────────────────────────────────
-ALTER TABLE public.notification_outbox ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "notification_outbox_service_role" ON public.notification_outbox;
-CREATE POLICY "notification_outbox_service_role"
-    ON public.notification_outbox
-    FOR ALL
-    TO service_role
-    USING (true)
-    WITH CHECK (true);
-
-DROP POLICY IF EXISTS "notification_outbox_super_admin_select" ON public.notification_outbox;
-CREATE POLICY "notification_outbox_super_admin_select"
-    ON public.notification_outbox
-    FOR SELECT
-    TO authenticated
-    USING (public.current_user_role() = 'super_admin');
-
--- -----------------------------------------------------------------------------
--- 18L. NOTIFICATION LOGS POLICIES
--- -----------------------------------------------------------------------------
-ALTER TABLE public.notification_logs ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "notification_logs_super_admin_all" ON public.notification_logs;
-CREATE POLICY "notification_logs_super_admin_all"
-    ON public.notification_logs
-    FOR ALL
-    TO authenticated
-    USING (public.current_user_role() = 'super_admin')
-    WITH CHECK (public.current_user_role() = 'super_admin');
-
-DROP POLICY IF EXISTS "notification_logs_staff_select" ON public.notification_logs;
-CREATE POLICY "notification_logs_staff_select"
-    ON public.notification_logs
-    FOR SELECT
-    TO authenticated
-    USING (
-        public.current_user_role() IN ('admission_counsellor', 'academic_counsellor')
-        AND (
-            related_entity_id IN (
-                SELECT id FROM public.admission_enquiries WHERE assigned_counsellor_id = auth.uid()
-                UNION ALL
-                SELECT id FROM public.counselling_bookings WHERE assigned_counsellor_id = auth.uid()
-            )
-        )
-    );
-
-DROP POLICY IF EXISTS "notification_logs_service_role" ON public.notification_logs;
-CREATE POLICY "notification_logs_service_role"
-    ON public.notification_logs
-    FOR ALL
-    TO service_role
-    USING (true)
-    WITH CHECK (true);
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_bookings(INTEGER, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_bookings(INTEGER, INTEGER) TO authenticated;

@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     full_name TEXT NOT NULL CHECK (LENGTH(TRIM(full_name)) >= 2),
     email TEXT UNIQUE NOT NULL CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
-    role public.app_role NOT NULL DEFAULT 'admission_counsellor',
+    role public.app_role,
     department TEXT NOT NULL DEFAULT 'General Administration',
     specialisation TEXT,
     daily_capacity INTEGER NOT NULL DEFAULT 10 CHECK (daily_capacity >= 1 AND daily_capacity <= 50),
@@ -87,6 +87,129 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_active ON public.profiles(is_active);
+
+-- Automatic Profile Provisioning Trigger on auth.users
+-- Automatically provisions an administrative profile in public.profiles whenever a new user is created in Supabase Auth.
+CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_role public.app_role := NULL;
+    v_raw_role TEXT;
+BEGIN
+    -- Read role explicitly from user metadata if provided
+    v_raw_role := LOWER(TRIM(COALESCE(
+        NEW.raw_user_meta_data->>'role',
+        NEW.raw_app_meta_data->>'role'
+    )));
+    
+    IF v_raw_role IN ('super_admin', 'admission_counsellor', 'academic_counsellor') THEN
+        v_role := v_raw_role::public.app_role;
+    END IF;
+
+    INSERT INTO public.profiles (
+        id,
+        email,
+        full_name,
+        role,
+        department,
+        is_active,
+        daily_capacity
+    )
+    VALUES (
+        NEW.id,
+        LOWER(TRIM(NEW.email)),
+        COALESCE(
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
+            INITCAP(SPLIT_PART(NEW.email, '@', 1))
+        ),
+        v_role, -- Explicit role from metadata, or NULL (awaiting admin assignment)
+        COALESCE(
+            NULLIF(TRIM(NEW.raw_user_meta_data->>'department'), ''),
+            CASE 
+                WHEN v_role = 'super_admin' THEN 'Executive Administration'
+                WHEN v_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+                WHEN v_role = 'admission_counsellor' THEN 'Admission Department'
+                ELSE 'General Administration'
+            END
+        ),
+        true,
+        10
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        updated_at = NOW();
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
+
+-- Self-Healing Profile Synchronization RPC
+-- Allows authenticated staff to retrieve (and if missing, auto-provision) their administrative profile.
+CREATE OR REPLACE FUNCTION public.get_or_sync_current_profile()
+RETURNS TABLE (
+    id UUID,
+    full_name TEXT,
+    email TEXT,
+    role public.app_role,
+    department TEXT,
+    specialisation TEXT,
+    daily_capacity INTEGER,
+    phone TEXT,
+    is_active BOOLEAN
+) AS $$
+DECLARE
+    v_uid UUID;
+    v_email TEXT;
+BEGIN
+    v_uid := auth.uid();
+    IF v_uid IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- If profile does not exist, check if user exists in auth.users and provision
+    IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE public.profiles.id = v_uid) THEN
+        SELECT u.email INTO v_email FROM auth.users u WHERE u.id = v_uid;
+        
+        IF v_email IS NOT NULL THEN
+            INSERT INTO public.profiles (
+                id,
+                email,
+                full_name,
+                role,
+                department,
+                is_active,
+                daily_capacity
+            )
+            VALUES (
+                v_uid,
+                LOWER(TRIM(v_email)),
+                INITCAP(SPLIT_PART(v_email, '@', 1)),
+                NULL, -- Explicitly NULL until admin assigns
+                'General Administration',
+                true,
+                10
+            )
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
+    END IF;
+
+    RETURN QUERY
+    SELECT p.id, p.full_name, p.email, p.role, p.department, p.specialisation, p.daily_capacity, p.phone, p.is_active
+    FROM public.profiles p
+    WHERE p.id = v_uid;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_or_sync_current_profile() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_or_sync_current_profile() TO authenticated;
 
 -- Trusted Role Retrieval Helper Function
 -- Returns verified role ONLY if user is authenticated and is_active = true.
@@ -145,11 +268,12 @@ GRANT EXECUTE ON FUNCTION public.get_staff_directory() TO authenticated;
 -- Trigger Function: Protect Privileged Profile Fields
 -- Prevents ordinary staff from modifying role, is_active, or daily_capacity.
 -- Replaces recursive subqueries in RLS with a direct, reliable BEFORE UPDATE check.
+-- Permits service_role and database administrators (where auth.uid() is NULL) and Super Admin to update.
 CREATE OR REPLACE FUNCTION public.protect_profile_privileged_fields()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Super Admin can manage all fields
-    IF public.current_user_role() != 'super_admin' THEN
+    -- Only enforce restrictions for ordinary authenticated staff through client APIs (where auth.uid() is not null)
+    IF auth.uid() IS NOT NULL AND public.current_user_role() IS DISTINCT FROM 'super_admin' THEN
         IF NEW.role IS DISTINCT FROM OLD.role THEN
             RAISE EXCEPTION 'Unauthorized: Ordinary staff cannot alter their assigned role.';
         END IF;
@@ -169,6 +293,96 @@ DROP TRIGGER IF EXISTS trg_protect_profile_fields ON public.profiles;
 CREATE TRIGGER trg_protect_profile_fields
 BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.protect_profile_privileged_fields();
+
+-- Safe Helper Function for Assigning Admin Roles
+-- Super Admin or database administrator can call this helper to immediately link any email to its correct role.
+-- Also auto-provisions default availability slots if role is academic_counsellor.
+CREATE OR REPLACE FUNCTION public.assign_admin_role(
+    p_email TEXT,
+    p_role public.app_role,
+    p_department TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_target_id UUID;
+    v_dept TEXT;
+    v_day INT;
+BEGIN
+    -- 1. Find profile by email (case-insensitive)
+    SELECT id INTO v_target_id 
+    FROM public.profiles 
+    WHERE LOWER(TRIM(email)) = LOWER(TRIM(p_email));
+
+    -- If profile doesn't exist yet, check auth.users and create matching profile
+    IF v_target_id IS NULL THEN
+        SELECT id INTO v_target_id 
+        FROM auth.users 
+        WHERE LOWER(TRIM(email)) = LOWER(TRIM(p_email));
+        
+        IF v_target_id IS NULL THEN
+            RETURN jsonb_build_object(
+                'success', false, 
+                'message', 'User with email ' || p_email || ' not found in Authentication users. Please create the user first in Supabase Auth.'
+            );
+        END IF;
+
+        INSERT INTO public.profiles (
+            id, email, full_name, role, department, is_active, daily_capacity
+        ) VALUES (
+            v_target_id,
+            LOWER(TRIM(p_email)),
+            INITCAP(SPLIT_PART(p_email, '@', 1)),
+            p_role,
+            COALESCE(p_department, CASE 
+                WHEN p_role = 'super_admin' THEN 'Executive Administration'
+                WHEN p_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+                WHEN p_role = 'admission_counsellor' THEN 'Admission Department'
+                ELSE 'General Administration'
+            END),
+            true,
+            10
+        );
+    ELSE
+        -- 2. Update existing profile role & department
+        v_dept := COALESCE(p_department, CASE 
+            WHEN p_role = 'super_admin' THEN 'Executive Administration'
+            WHEN p_role = 'academic_counsellor' THEN 'Academic Counselling Department'
+            WHEN p_role = 'admission_counsellor' THEN 'Admission Department'
+            ELSE 'General Administration'
+        END);
+
+        UPDATE public.profiles
+        SET 
+            role = p_role,
+            department = v_dept,
+            is_active = true,
+            updated_at = NOW()
+        WHERE id = v_target_id;
+    END IF;
+
+    -- 3. If role is academic_counsellor, ensure baseline availability slots exist for Monday-Saturday
+    IF p_role = 'academic_counsellor' THEN
+        FOR v_day IN 1..6 LOOP
+            INSERT INTO public.counsellor_availability (
+                counsellor_id, day_of_week, start_time, end_time, slot_duration_minutes, is_available, is_active
+            ) VALUES (
+                v_target_id, v_day, '09:00:00'::TIME, '20:30:00'::TIME, 30, true, true
+            ) ON CONFLICT (counsellor_id, day_of_week, start_time, end_time) DO NOTHING;
+        END LOOP;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Role successfully assigned to ' || p_email || ' as ' || p_role::TEXT,
+        'profile_id', v_target_id,
+        'role', p_role::TEXT
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.assign_admin_role(TEXT, public.app_role, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.assign_admin_role(TEXT, public.app_role, TEXT) TO service_role, postgres;
 
 -- =============================================================================
 -- 4. CENTRAL STUDENTS TABLE (Deduplicated Aspirant Repository)
@@ -391,13 +605,18 @@ CREATE TABLE IF NOT EXISTS public.counselling_bookings (
 CREATE INDEX IF NOT EXISTS idx_counselling_student ON public.counselling_bookings(student_id);
 CREATE INDEX IF NOT EXISTS idx_counselling_course ON public.counselling_bookings(course_id);
 CREATE INDEX IF NOT EXISTS idx_counselling_counsellor ON public.counselling_bookings(assigned_counsellor_id);
+
+
+
+-- Prevent double-booking: same counsellor, same date, same time slot for active bookings
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_no_double_booking
+
+ON public.counselling_bookings (assigned_counsellor_id, preferred_date, preferred_time)
+
+WHERE status IN ('Assigned', 'Confirmed') AND assigned_counsellor_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_counselling_date ON public.counselling_bookings(preferred_date);
 CREATE INDEX IF NOT EXISTS idx_counselling_status ON public.counselling_bookings(status);
-
--- Partial Unique Index: Prevents Double-Booking for Assigned/Confirmed Sessions
-CREATE UNIQUE INDEX IF NOT EXISTS idx_counselling_no_double_book
-ON public.counselling_bookings (assigned_counsellor_id, preferred_date, preferred_time)
-WHERE status IN ('Confirmed', 'Assigned') AND assigned_counsellor_id IS NOT NULL;
 
 -- =============================================================================
 -- 8. BOOKING RESCHEDULE HISTORY TABLE
@@ -470,7 +689,9 @@ CREATE INDEX IF NOT EXISTS idx_followups_status ON public.follow_ups(status);
 
 -- Trigger: Validate student and parent record consistency for follow-ups
 CREATE OR REPLACE FUNCTION public.validate_follow_up_parent()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+AS $$
 DECLARE
     v_parent_student_id UUID;
 BEGIN
@@ -479,7 +700,7 @@ BEGIN
         IF v_parent_student_id IS NULL THEN
             RAISE EXCEPTION 'Referenced admission enquiry does not exist.';
         END IF;
-        IF NEW.student_id != v_parent_student_id THEN
+        IF NEW.student_id IS DISTINCT FROM v_parent_student_id THEN
             RAISE EXCEPTION 'Follow-up student_id (%) does not match enquiry student_id (%).', NEW.student_id, v_parent_student_id;
         END IF;
     ELSIF NEW.booking_id IS NOT NULL THEN
@@ -487,14 +708,15 @@ BEGIN
         IF v_parent_student_id IS NULL THEN
             RAISE EXCEPTION 'Referenced counselling booking does not exist.';
         END IF;
-        IF NEW.student_id != v_parent_student_id THEN
+        IF NEW.student_id IS DISTINCT FROM v_parent_student_id THEN
             RAISE EXCEPTION 'Follow-up student_id (%) does not match booking student_id (%).', NEW.student_id, v_parent_student_id;
         END IF;
     END IF;
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_validate_followup_parent ON public.follow_ups;
 CREATE TRIGGER trg_validate_followup_parent
@@ -506,7 +728,7 @@ CREATE OR REPLACE FUNCTION public.protect_followup_assignment()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'UPDATE') THEN
-        IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to AND public.current_user_role() != 'super_admin' THEN
+        IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to AND public.current_user_role() IS DISTINCT FROM 'super_admin' THEN
             RAISE EXCEPTION 'Unauthorized: Only Super Admins can reassign follow-ups to another staff member.';
         END IF;
     END IF;
@@ -541,7 +763,9 @@ CREATE INDEX IF NOT EXISTS idx_availability_counsellor ON public.counsellor_avai
 
 -- Trigger: Ensure availability is only configured for active counsellor profiles
 CREATE OR REPLACE FUNCTION public.validate_counsellor_availability()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+AS $$
 DECLARE
     v_role public.app_role;
     v_active BOOLEAN;
@@ -560,7 +784,8 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_validate_counsellor_availability ON public.counsellor_availability;
 CREATE TRIGGER trg_validate_counsellor_availability
@@ -642,7 +867,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.internal_log_activity FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.internal_log_activity(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, JSONB) FROM PUBLIC;
 
 -- =============================================================================
 -- 14B. NOTIFICATION DELIVERY AUDIT LOGS TABLE (Resend & Meta WhatsApp)
@@ -707,7 +932,8 @@ BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_profiles_updated_at ON public.profiles;
 CREATE TRIGGER trg_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
@@ -767,7 +993,7 @@ BEGIN
 
     -- Notification on Status Transition
     IF (TG_OP = 'UPDATE') AND (OLD.status IS DISTINCT FROM NEW.status) THEN
-        IF NEW.assigned_counsellor_id IS NOT NULL AND NEW.assigned_counsellor_id != COALESCE(v_actor_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN
+        IF NEW.assigned_counsellor_id IS NOT NULL AND NEW.assigned_counsellor_id IS DISTINCT FROM COALESCE(v_actor_id, '00000000-0000-0000-0000-000000000000'::uuid) THEN
             INSERT INTO public.notifications (recipient_id, title, message, notification_type, related_record_id)
             VALUES (
                 NEW.assigned_counsellor_id,
@@ -949,7 +1175,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.auto_assign_admission_enquiry FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.auto_assign_admission_enquiry(TEXT) FROM PUBLIC;
 
 
 -- Automatic Counsellor Assignment Engine: Counselling Bookings
@@ -1082,7 +1308,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.auto_assign_counselling_booking FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.auto_assign_counselling_booking(TEXT, DATE, TEXT, TEXT) FROM PUBLIC;
 
 
 -- Super Admin Manual Lead Reassignment RPC
@@ -1100,7 +1326,8 @@ BEGIN
     v_user_id := auth.uid();
     v_user_role := public.current_user_role();
 
-    IF v_user_role != 'super_admin' THEN
+
+    IF v_user_role IS DISTINCT FROM 'super_admin' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Administrators can reassign leads.');
     END IF;
 
@@ -1171,8 +1398,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.reassign_admission_enquiry FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reassign_admission_enquiry TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reassign_admission_enquiry(TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reassign_admission_enquiry(TEXT, UUID) TO authenticated;
 
 
 -- Super Admin Manual Booking Reassignment RPC
@@ -1191,7 +1418,7 @@ BEGIN
     v_user_id := auth.uid();
     v_user_role := public.current_user_role();
 
-    IF v_user_role != 'super_admin' THEN
+    IF v_user_role IS DISTINCT FROM 'super_admin' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Administrators can reassign counselling sessions.');
     END IF;
 
@@ -1275,8 +1502,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.reassign_counselling_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reassign_counselling_booking TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reassign_counselling_booking(TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reassign_counselling_booking(TEXT, UUID) TO authenticated;
 
 -- 16. SECURE PUBLIC SUBMISSION & RESCHEDULE RPC FUNCTIONS
 -- =============================================================================
@@ -1337,9 +1564,9 @@ BEGIN
     -- 11. Create notification outbox entry for async processing
     BEGIN
         INSERT INTO public.notification_outbox (
-            event_type, entity_type, entity_id, priority, scheduled_at, status
+            event_type, entity_type, entity_id, channel, status, scheduled_at
         ) VALUES (
-            'enquiry_acknowledgement', 'admission_enquiry', v_enquiry_id, 1, NOW(), 'pending'
+            'enquiry_submitted', 'admission_enquiry', v_enquiry_id::TEXT, 'both', 'pending', NOW()
         ) RETURNING id INTO v_outbox_id;
     EXCEPTION WHEN OTHERS THEN
         -- Non-fatal: outbox failure must not fail the enquiry submission
@@ -1357,8 +1584,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.submit_admission_enquiry FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.submit_admission_enquiry TO anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.submit_admission_enquiry(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.submit_admission_enquiry(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 
 -- Public Counselling Booking Submission RPC
 -- Validates:
@@ -1395,6 +1622,9 @@ DECLARE
     v_generated_meet_link TEXT;
     v_outbox_id UUID;
 BEGIN
+    -- Normalize slot string hyphens
+    p_preferred_time := REPLACE(p_preferred_time, '–', '-');
+
     -- 1. Evaluate current date strictly in Asia/Kolkata timezone
     v_today_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
     IF p_preferred_date < v_today_ist THEN
@@ -1565,9 +1795,9 @@ BEGIN
     -- 11. Create notification outbox entry for async processing
     BEGIN
         INSERT INTO public.notification_outbox (
-            event_type, entity_type, entity_id, priority, scheduled_at, status
+            event_type, entity_type, entity_id, channel, status, scheduled_at
         ) VALUES (
-            'booking_confirmation', 'counselling_booking', v_booking_id, 1, NOW(), 'pending'
+            'booking_submitted', 'counselling_booking', v_booking_id, 'both', 'pending', NOW()
         ) RETURNING id INTO v_outbox_id;
     EXCEPTION WHEN OTHERS THEN
         -- Non-fatal: outbox failure must not fail the booking submission
@@ -1586,8 +1816,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.submit_counselling_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.submit_counselling_booking TO anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.submit_counselling_booking(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.submit_counselling_booking(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, TEXT) TO anon, authenticated;
 
 -- Transactional Reschedule RPC with Strict Authorization & Double-Booking Check
 CREATE OR REPLACE FUNCTION public.reschedule_booking(
@@ -1634,7 +1864,7 @@ BEGIN
     END IF;
 
     -- Strict Authorization Check: Only Super Admin OR the assigned Academic Counsellor can reschedule
-    IF v_user_role != 'super_admin' AND (v_booking.assigned_counsellor_id IS NULL OR v_booking.assigned_counsellor_id != v_user_id) THEN
+    IF v_user_role IS DISTINCT FROM 'super_admin' AND (v_booking.assigned_counsellor_id IS NULL OR v_booking.assigned_counsellor_id IS DISTINCT FROM v_user_id) THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You are not authorized to reschedule this session.');
     END IF;
 
@@ -1651,7 +1881,7 @@ BEGIN
           AND is_active = true;
 
         IF v_avail_count = 0 THEN
-            RETURN jsonb_build_object('success', false, 'message', 'Selected date falls outside the assigned counsellor's configured working days.');
+            RETURN jsonb_build_object('success', false, 'message', 'Selected date falls outside the assigned counsellor''s configured working days.');
         END IF;
 
         -- Double-Booking Prevention: Check conflict against confirmed/assigned sessions
@@ -1706,8 +1936,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.reschedule_booking FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.reschedule_booking TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reschedule_booking(TEXT, DATE, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reschedule_booking(TEXT, DATE, TEXT, TEXT) TO authenticated;
 
 
 -- =============================================================================
@@ -1738,7 +1968,7 @@ BEGIN
             'total_bookings',     (SELECT COUNT(*) FROM public.counselling_bookings),
             'pending_bookings',   (SELECT COUNT(*) FROM public.counselling_bookings WHERE status = 'Pending'),
             'confirmed_bookings', (SELECT COUNT(*) FROM public.counselling_bookings WHERE status = 'Confirmed'),
-            'active_counsellors', (SELECT COUNT(*) FROM public.profiles WHERE is_active = true AND role != 'super_admin'),
+            'active_counsellors', (SELECT COUNT(*) FROM public.profiles WHERE is_active = true AND role IS DISTINCT FROM 'super_admin'),
             'today_followups',    (SELECT COUNT(*) FROM public.follow_ups WHERE status = 'pending' AND follow_up_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE),
             'conversion_rate',    ROUND(
                 CASE WHEN (SELECT COUNT(*) FROM public.admission_enquiries) = 0 THEN 0
@@ -1771,8 +2001,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.get_dashboard_stats FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_dashboard_stats TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_stats() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_stats() TO authenticated;
 
 
 -- Update enquiry status (role-restricted)
@@ -1798,7 +2028,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Enquiry not found');
     END IF;
 
-    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id != v_uid THEN
+    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id IS DISTINCT FROM v_uid THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only update enquiries assigned to you.');
     END IF;
 
@@ -1823,8 +2053,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.update_enquiry_status FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_enquiry_status TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.update_enquiry_status(TEXT, public.enquiry_status) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_enquiry_status(TEXT, public.enquiry_status) TO authenticated;
 
 
 -- Update booking status (role-restricted)
@@ -1850,7 +2080,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Booking not found');
     END IF;
 
-    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id != v_uid THEN
+    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id IS DISTINCT FROM v_uid THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only update bookings assigned to you.');
     END IF;
 
@@ -1875,8 +2105,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.update_booking_status FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_booking_status TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.update_booking_status(TEXT, public.booking_status) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_booking_status(TEXT, public.booking_status) TO authenticated;
 
 
 -- Add an internal note to an enquiry (authenticated staff only)
@@ -1908,7 +2138,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Enquiry not found.');
     END IF;
 
-    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id != v_uid THEN
+    IF v_role = 'admission_counsellor' AND v_enquiry.assigned_counsellor_id IS DISTINCT FROM v_uid THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only add notes to enquiries assigned to you.');
     END IF;
 
@@ -1927,8 +2157,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.add_enquiry_note FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.add_enquiry_note TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.add_enquiry_note(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.add_enquiry_note(TEXT, TEXT) TO authenticated;
 
 
 -- Add an internal note to a counselling booking (authenticated staff only)
@@ -1960,7 +2190,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Booking not found.');
     END IF;
 
-    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id != v_uid THEN
+    IF v_role = 'academic_counsellor' AND v_booking.assigned_counsellor_id IS DISTINCT FROM v_uid THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only add notes to bookings assigned to you.');
     END IF;
 
@@ -1979,8 +2209,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.add_booking_note FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.add_booking_note TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.add_booking_note(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.add_booking_note(TEXT, TEXT) TO authenticated;
 
 
 -- Create a follow-up task (authenticated staff only)
@@ -2037,8 +2267,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.create_follow_up FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.create_follow_up TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.create_follow_up(UUID, TEXT, TEXT, DATE, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.create_follow_up(UUID, TEXT, TEXT, DATE, TEXT, TEXT, TEXT) TO authenticated;
 
 
 -- Complete a follow-up (authenticated staff only)
@@ -2064,7 +2294,7 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'message', 'Follow-up not found.');
     END IF;
 
-    IF v_role != 'super_admin' AND v_fup.assigned_to != v_uid THEN
+    IF v_role IS DISTINCT FROM 'super_admin' AND v_fup.assigned_to IS DISTINCT FROM v_uid THEN
         RETURN jsonb_build_object('success', false, 'message', 'Access Denied: You can only complete follow-ups assigned to you.');
     END IF;
 
@@ -2082,8 +2312,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.complete_follow_up FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.complete_follow_up TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.complete_follow_up(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.complete_follow_up(UUID, TEXT) TO authenticated;
 
 
 -- Set Google Meet link for a booking (Super Admin only)
@@ -2097,7 +2327,7 @@ DECLARE
 BEGIN
     v_role := public.current_user_role();
 
-    IF v_role != 'super_admin' THEN
+    IF v_role IS DISTINCT FROM 'super_admin' THEN
         RETURN jsonb_build_object('success', false, 'message', 'Unauthorized: Only Super Admins can set Google Meet links.');
     END IF;
 
@@ -2118,8 +2348,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.set_booking_meet_link FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.set_booking_meet_link TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.set_booking_meet_link(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_booking_meet_link(TEXT, TEXT) TO authenticated;
 
 
 -- Get available booking slots for a given date (PUBLIC safe — returns slot labels only, no PII)
@@ -2130,6 +2360,7 @@ DECLARE
     v_today_ist DATE;
     v_avail_count INTEGER;
     v_slots JSONB;
+    SLOT_DURATION CONSTANT INTERVAL := INTERVAL '30 minutes';
 BEGIN
     v_today_ist := (NOW() AT TIME ZONE 'Asia/Kolkata')::DATE;
 
@@ -2158,20 +2389,28 @@ BEGIN
         );
     END IF;
 
+    -- Generate individual 30-minute slots from counsellor availability windows.
+    -- A slot is available if at least one active academic counsellor is free for that slot.
     SELECT jsonb_agg(slot_label ORDER BY slot_start) INTO v_slots
     FROM (
         SELECT DISTINCT
-            TO_CHAR(ca.start_time, 'HH12:MI AM') || ' - ' || TO_CHAR(ca.end_time, 'HH12:MI AM') AS slot_label,
-            ca.start_time AS slot_start
+            TO_CHAR(gs.slot_start, 'HH12:MI AM') || ' - ' || TO_CHAR(gs.slot_start + SLOT_DURATION, 'HH12:MI AM') AS slot_label,
+            gs.slot_start
         FROM public.counsellor_availability ca
         JOIN public.profiles p ON p.id = ca.counsellor_id
+        CROSS JOIN LATERAL generate_series(
+            ca.start_time,
+            ca.end_time - SLOT_DURATION,
+            SLOT_DURATION
+        ) AS gs(slot_start)
         WHERE ca.day_of_week = v_dow
           AND ca.is_available = true
           AND ca.is_active = true
           AND p.is_active = true
           AND p.role = 'academic_counsellor'
-          AND (
-              SELECT COUNT(DISTINCT p2.id)
+          -- Keep the slot only if at least one counsellor covering it is not booked
+          AND EXISTS (
+              SELECT 1
               FROM public.profiles p2
               JOIN public.counsellor_availability ca2 ON ca2.counsellor_id = p2.id
               WHERE p2.is_active = true
@@ -2179,16 +2418,16 @@ BEGIN
                 AND ca2.day_of_week = v_dow
                 AND ca2.is_available = true
                 AND ca2.is_active = true
-                AND ca2.start_time = ca.start_time
-                AND ca2.end_time = ca.end_time
+                AND gs.slot_start >= ca2.start_time
+                AND gs.slot_start + SLOT_DURATION <= ca2.end_time
                 AND NOT EXISTS (
                     SELECT 1 FROM public.counselling_bookings cb
                     WHERE cb.assigned_counsellor_id = p2.id
                       AND cb.preferred_date = p_date
-                      AND cb.preferred_time = TO_CHAR(ca.start_time, 'HH12:MI AM') || ' - ' || TO_CHAR(ca.end_time, 'HH12:MI AM')
+                      AND cb.preferred_time = TO_CHAR(gs.slot_start, 'HH12:MI AM') || ' - ' || TO_CHAR(gs.slot_start + SLOT_DURATION, 'HH12:MI AM')
                       AND cb.status IN ('Confirmed', 'Assigned')
                 )
-          ) > 0
+          )
     ) available_slots;
 
     RETURN jsonb_build_object(
@@ -2201,8 +2440,209 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp;
 
-REVOKE EXECUTE ON FUNCTION public.get_available_booking_slots FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_available_booking_slots TO anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.get_available_booking_slots(DATE) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_available_booking_slots(DATE) TO anon, authenticated;
+
+-- Atomic outbox record claiming for server-side notification dispatch.
+-- Uses FOR UPDATE SKIP LOCKED to prevent race conditions between workers.
+CREATE OR REPLACE FUNCTION public.claim_outbox_records(p_batch_size INTEGER DEFAULT 5)
+RETURNS SETOF UUID AS $$
+BEGIN
+  RETURN QUERY
+  UPDATE public.notification_outbox
+  SET status = 'processing', processed_at = NOW()
+  WHERE id IN (
+    SELECT id FROM public.notification_outbox
+    WHERE status = 'pending' AND scheduled_at <= NOW()
+    ORDER BY created_at ASC
+    LIMIT p_batch_size
+    FOR UPDATE SKIP LOCKED
+  )
+  RETURNING id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.claim_outbox_records(INTEGER) FROM PUBLIC;
+COMMENT ON FUNCTION public.claim_outbox_records(INTEGER) IS 'Atomically claims pending notification outbox records for processing. Called by pg_cron or Edge Function with service role. Uses FOR UPDATE SKIP LOCKED to prevent duplicate processing.';
+
+-- Reset stale processing records (stuck > 15 minutes) back to pending
+CREATE OR REPLACE FUNCTION public.reset_stale_outbox_records()
+RETURNS INTEGER AS $$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  UPDATE public.notification_outbox
+  SET status = 'pending', processed_at = NULL, attempts = attempts + 1
+  WHERE status = 'processing' AND processed_at < NOW() - INTERVAL '15 minutes';
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.reset_stale_outbox_records() FROM PUBLIC;
+COMMENT ON FUNCTION public.reset_stale_outbox_records() IS 'Resets notification_outbox records stuck in processing state for >15 minutes. Should be called by pg_cron every 5 minutes.';
+
+-- Dashboard data retrieval RPCs for authenticated admin users
+-- These provide role-filtered access to operational data
+
+CREATE OR REPLACE FUNCTION public.get_dashboard_enquiries(p_limit INTEGER DEFAULT 50, p_offset INTEGER DEFAULT 0)
+RETURNS JSONB AS $$
+DECLARE
+    v_role public.app_role;
+    v_uid UUID;
+    v_result JSONB;
+BEGIN
+    v_uid := auth.uid();
+    v_role := public.current_user_role();
+    IF v_role IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
+    END IF;
+
+    IF v_role = 'super_admin' OR v_role = 'admission_counsellor' THEN
+        SELECT jsonb_build_object(
+            'success', true,
+            'data', COALESCE(jsonb_agg(row_to_json(eq) ORDER BY eq.created_at DESC), '[]'::jsonb)
+        ) INTO v_result
+        FROM (
+            SELECT e.id, e.student_id, s.full_name AS student_name, s.phone, s.email, s.qualification,
+                   e.course_id, e.course_category, e.target_examination,
+                   e.preferred_batch_timing, e.preferred_learning_mode,
+                   e.additional_message, e.status::TEXT, e.priority, e.source,
+                   e.assigned_counsellor_id, p.full_name AS counsellor_name,
+                   e.created_at, e.updated_at
+            FROM public.admission_enquiries e
+            JOIN public.students s ON s.id = e.student_id
+            LEFT JOIN public.profiles p ON p.id = e.assigned_counsellor_id
+            WHERE v_role = 'super_admin' OR e.assigned_counsellor_id = v_uid
+            ORDER BY e.created_at DESC
+            LIMIT p_limit OFFSET p_offset
+        ) eq;
+    ELSE
+        v_result := jsonb_build_object('success', true, 'data', '[]'::jsonb);
+    END IF;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_enquiries(INTEGER, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_enquiries(INTEGER, INTEGER) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_dashboard_bookings(p_limit INTEGER DEFAULT 50, p_offset INTEGER DEFAULT 0)
+RETURNS JSONB AS $$
+DECLARE
+    v_role public.app_role;
+    v_uid UUID;
+    v_result JSONB;
+BEGIN
+    v_uid := auth.uid();
+    v_role := public.current_user_role();
+    IF v_role IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
+    END IF;
+
+    IF v_role = 'super_admin' OR v_role = 'academic_counsellor' THEN
+        SELECT jsonb_build_object(
+            'success', true,
+            'data', COALESCE(jsonb_agg(row_to_json(bq) ORDER BY bq.created_at DESC), '[]'::jsonb)
+        ) INTO v_result
+        FROM (
+            SELECT b.id, b.student_id, s.full_name AS student_name, s.phone, s.email,
+                   b.course_id, b.course_category, b.target_examination,
+                   b.preferred_date, b.preferred_time, b.session_medium,
+                   b.google_meet_link, b.status::TEXT, b.counselling_notes,
+                   b.assigned_counsellor_id, p.full_name AS counsellor_name,
+                   b.created_at, b.updated_at
+            FROM public.counselling_bookings b
+            JOIN public.students s ON s.id = b.student_id
+            LEFT JOIN public.profiles p ON p.id = b.assigned_counsellor_id
+            WHERE v_role = 'super_admin' OR b.assigned_counsellor_id = v_uid
+            ORDER BY b.created_at DESC
+            LIMIT p_limit OFFSET p_offset
+        ) bq;
+    ELSE
+        v_result := jsonb_build_object('success', true, 'data', '[]'::jsonb);
+    END IF;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_bookings(INTEGER, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_bookings(INTEGER, INTEGER) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_dashboard_follow_ups()
+RETURNS JSONB AS $$
+DECLARE
+    v_role public.app_role;
+    v_uid UUID;
+    v_result JSONB;
+BEGIN
+    v_uid := auth.uid();
+    v_role := public.current_user_role();
+    IF v_role IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
+    END IF;
+
+    SELECT jsonb_build_object(
+        'success', true,
+        'data', COALESCE(jsonb_agg(row_to_json(fq) ORDER BY fq.follow_up_date ASC), '[]'::jsonb)
+    ) INTO v_result
+    FROM (
+        SELECT f.id, f.student_id, s.full_name AS student_name, s.phone AS student_phone,
+               f.enquiry_id, f.booking_id, f.assigned_to,
+               p.full_name AS counsellor_name, f.follow_up_date, f.follow_up_time,
+               f.follow_up_type, f.notes, f.status::TEXT, f.completed_at, f.created_at
+        FROM public.follow_ups f
+        JOIN public.students s ON s.id = f.student_id
+        LEFT JOIN public.profiles p ON p.id = f.assigned_to
+        WHERE v_role = 'super_admin' OR f.assigned_to = v_uid
+        ORDER BY f.follow_up_date ASC
+        LIMIT 100
+    ) fq;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_follow_ups() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_follow_ups() TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_dashboard_activity_log(p_limit INTEGER DEFAULT 50)
+RETURNS JSONB AS $$
+DECLARE
+    v_role public.app_role;
+    v_uid UUID;
+    v_result JSONB;
+BEGIN
+    v_uid := auth.uid();
+    v_role := public.current_user_role();
+    IF v_role IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'message', 'Unauthorized');
+    END IF;
+
+    SELECT jsonb_build_object(
+        'success', true,
+        'data', COALESCE(jsonb_agg(row_to_json(aq) ORDER BY aq.created_at DESC), '[]'::jsonb)
+    ) INTO v_result
+    FROM (
+        SELECT a.id, a.actor_id, a.actor_name, a.actor_role,
+               a.action_type, a.description,
+               a.target_entity_type AS entity_type,
+               a.target_entity_id AS entity_id,
+               a.metadata, a.created_at
+        FROM public.activity_logs a
+        WHERE v_role = 'super_admin' OR a.actor_id = v_uid
+        ORDER BY a.created_at DESC
+        LIMIT p_limit
+    ) aq;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE EXECUTE ON FUNCTION public.get_dashboard_activity_log(INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_dashboard_activity_log(INTEGER) TO authenticated;
 
 -- =============================================================================
 -- 17. SEED CORE DATA (Courses & Sample Batches)
@@ -2277,13 +2717,13 @@ DROP POLICY IF EXISTS "Staff view own profile" ON public.profiles;
 CREATE POLICY "Staff view own profile"
 ON public.profiles FOR SELECT
 TO authenticated
-USING (id = auth.uid() AND public.current_user_role() IS NOT NULL);
+USING (id = auth.uid());
 
 DROP POLICY IF EXISTS "Staff update own profile" ON public.profiles;
 CREATE POLICY "Staff update own profile"
 ON public.profiles FOR UPDATE
 TO authenticated
-USING (id = auth.uid() AND public.current_user_role() IS NOT NULL)
+USING (id = auth.uid())
 WITH CHECK (id = auth.uid());
 
 -- ── 2. COURSES & BATCHES POLICIES ───────────────────────────────────────────

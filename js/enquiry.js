@@ -28,6 +28,23 @@ function initEnquiryForm() {
     });
   });
 
+  // Dynamic verification of active courses from Supabase
+  if (typeof window.ApexSupabase !== 'undefined' && window.ApexSupabase.isLive()) {
+    window.ApexSupabase.getCourses().then(courses => {
+      if (Array.isArray(courses) && courses.length > 0) {
+        coursePills.forEach(pill => {
+          const cid = pill.getAttribute('data-course-id');
+          const matched = courses.find(c => c.id === cid);
+          if (matched && matched.is_active === false) {
+            pill.style.display = 'none';
+          }
+        });
+      }
+    }).catch(err => {
+      console.warn('Could not verify courses with Supabase:', err);
+    });
+  }
+
   // 3. Setup Learning Mode Pills
   const modePills = document.querySelectorAll('.mode-pill');
   modePills.forEach(pill => {
@@ -230,7 +247,9 @@ function handleFormSubmit(e) {
   const phone = document.getElementById('mobile-number')?.value.trim();
   const email = document.getElementById('email-address')?.value.trim();
   const qualification = document.getElementById('educational-qualification')?.value.trim();
-  const courseCategory = document.getElementById('selected-course-input')?.value.trim();
+  const courseInput = document.getElementById('selected-course-input');
+  const courseCategory = courseInput?.value.trim();
+  const courseId = currentCourseId || courseInput?.getAttribute('data-course-id') || 'civil-services-ssc';
   const targetExam = document.getElementById('target-examination')?.value.trim();
   const batch = document.getElementById('selected-batch-input')?.value.trim();
   const mode = document.getElementById('selected-mode-input')?.value.trim();
@@ -263,9 +282,9 @@ function handleFormSubmit(e) {
     isValid = false;
   }
 
-  // 5. Validate Course Category
-  if (!courseCategory) {
-    setFieldError('selected-course-input', 'Please select a course category');
+  // 5. Validate Course Category & Course ID
+  if (!courseCategory || !courseId) {
+    setFieldError('selected-course-input', 'Please select a valid course category from the available options');
     isValid = false;
   }
 
@@ -306,6 +325,7 @@ function handleFormSubmit(e) {
     phone: phoneDigits,
     email: email,
     qualification: qualification,
+    courseId: courseId,
     courseCategory: courseCategory,
     targetExamination: targetExam,
     preferredBatch: batch,
@@ -362,27 +382,8 @@ function handleFormSubmit(e) {
         const tokenEl = document.getElementById('confirm-token');
         if (tokenEl) tokenEl.textContent = token;
 
-        // Trigger server-side notification pipeline via secure outbox pattern.
-        // The submit_admission_enquiry RPC inserts an outbox record automatically.
-        // We only signal the Edge Function with the outbox record ID (if provided).
-        if (res.outboxId && typeof window.ApexSupabase?.processNotificationOutbox === 'function') {
-          window.ApexSupabase.processNotificationOutbox(res.outboxId)
-            .catch(notifErr => console.warn('Background notification scheduling error:', notifErr));
-        }
-
-        // WhatsApp direct follow-up link
-        const waLink = document.getElementById('confirm-wa-btn');
-        if (waLink) {
-          const waText = encodeURIComponent(
-            `Hello APEX ACADEMY, I have registered an admission enquiry on the portal (ID: ${token}).\n` +
-            `• Candidate: ${name}\n` +
-            `• Course: ${courseCategory}\n` +
-            `• Target Exam: ${targetExam}\n` +
-            `• Batch Timing: ${batch}\n` +
-            `• Learning Mode: ${mode}`
-          );
-          waLink.href = `https://wa.me/919876543210?text=${waText}`;
-        }
+        // Notification dispatch is handled server-side via pg_cron/database webhook.
+        // The submit_admission_enquiry RPC already created the outbox record.
 
         confirmationCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }

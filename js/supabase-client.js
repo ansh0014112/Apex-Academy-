@@ -66,13 +66,27 @@
         }
 
         // Fetch verified user profile from public.profiles
-        const { data: profile, error: profileErr } = await c
+        let { data: profile, error: profileErr } = await c
           .from('profiles')
           .select('id, full_name, email, role, department, specialisation, daily_capacity, phone, is_active')
           .eq('id', data.user.id)
           .single();
 
+        // If direct select failed, attempt self-healing sync RPC if available
+        if ((profileErr || !profile) && c.rpc) {
+          try {
+            const { data: synced, error: syncErr } = await c.rpc('get_or_sync_current_profile');
+            if (!syncErr && synced && synced.length > 0) {
+              profile = synced[0];
+              profileErr = null;
+            }
+          } catch (e) {
+            console.warn('Profile sync RPC attempt error:', e);
+          }
+        }
+
         if (profileErr || !profile) {
+          console.warn('Profile lookup failed for user ID:', data.user.id, profileErr);
           await c.auth.signOut();
           return {
             success: false,
@@ -89,14 +103,29 @@
           };
         }
 
+        // Check whether role has been assigned in institute records
+        if (!profile.role) {
+          await c.auth.signOut();
+          return {
+            success: false,
+            message: 'Access Denied: Account role has not yet been assigned in institute records. Please contact the Super Admin.'
+          };
+        }
+
         // Role verification against expected workspace
         if (expectedRole && profile.role !== expectedRole) {
           await c.auth.signOut();
-          const roleDisplay = profile.role.replace(/_/g, ' ');
-          const expectedDisplay = expectedRole.replace(/_/g, ' ');
+          const formatRoleName = (r) => {
+            if (r === 'super_admin') return 'Super Admin';
+            if (r === 'admission_counsellor') return 'Admission Counsellor';
+            if (r === 'academic_counsellor') return 'Academic Counsellor';
+            return (r || '').replace(/_/g, ' ');
+          };
+          const roleDisplay = formatRoleName(profile.role);
+          const expectedDisplay = formatRoleName(expectedRole);
           return {
             success: false,
-            message: `Access Denied: This account has '${roleDisplay}' permissions, which cannot access the '${expectedDisplay}' workspace.`
+            message: `Access Denied: This account is registered as ${roleDisplay}, which cannot access the ${expectedDisplay} portal. Please select the matching portal.`
           };
         }
 
@@ -187,17 +216,29 @@
 
       try {
         const c = this.getClient();
-        const { data, error } = await c.rpc('submit_admission_enquiry', {
+        const payload = {
           p_full_name: formData.fullName,
           p_phone: formData.phone,
           p_email: formData.email,
           p_qualification: formData.qualification,
-          p_course_category: formData.courseCategory,
+          p_course_category: formData.courseCategory || formData.courseId,
           p_target_examination: formData.targetExamination,
           p_preferred_batch: formData.preferredBatch,
           p_learning_mode: formData.learningMode,
-          p_message: formData.message || null
-        });
+          p_message: formData.message || null,
+          p_course_id: formData.courseId || null
+        };
+
+        let { data, error } = await c.rpc('submit_admission_enquiry', payload);
+
+        // Graceful fallback retry in case database has a legacy 9-param signature
+        if (error && (error.code === 'PGRST202' || (error.message && error.message.includes('p_course_id')))) {
+          const fallbackPayload = { ...payload };
+          delete fallbackPayload.p_course_id;
+          const retry = await c.rpc('submit_admission_enquiry', fallbackPayload);
+          data = retry.data;
+          error = retry.error;
+        }
 
         if (error) throw error;
         if (!data || !data.success) {
@@ -403,30 +444,11 @@
       }
     },
 
-    // Process notification outbox — Edge Function reads recipient data from DB (no PII in request body)
-    async processNotificationOutbox(outboxId) {
-      if (!this.isLive()) {
-        return { success: true, simulated: true, message: 'Supabase offline/demo mode; notification simulated.' };
-      }
-      try {
-        const c = this.getClient();
-        const { data: { session } } = await c.auth.getSession();
-        if (!session) return { success: false, error: 'No active session' };
-        const config = window.APEX_SUPABASE_CONFIG;
-        const body = outboxId ? JSON.stringify({ outbox_id: outboxId }) : '{}';
-        const res = await fetch(`${config.url}/functions/v1/send-notification`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body
-        });
-        return await res.json();
-      } catch (err) {
-        console.warn('processNotificationOutbox error:', err);
-        return { success: false, error: err.message };
-      }
+    // Notification processing is handled server-side only (pg_cron or database webhook).
+    // This method is intentionally disabled for public-facing pages.
+    async processNotificationOutbox() {
+      console.info('Notification dispatch is handled server-side. No client-side processing needed.');
+      return { success: true, message: 'Server-side dispatch only.' };
     },
 
     // Legacy alias — now routes through secure outbox architecture
@@ -449,10 +471,102 @@
 
     // Get available booking slots for a given date (calls get_available_booking_slots RPC)
     async getAvailableBookingSlots(date) {
-      if (!this.isLive()) return { success: false, slots: [], message: 'Database offline' };
+      if (this.isLive()) {
+        try {
+          const c = this.getClient();
+          const { data, error } = await c.rpc("get_available_booking_slots", { p_date: date });
+          if (!error && data && data.success) return data;
+          if (error) {
+            console.warn("RPC get_available_booking_slots error notice:", error.message);
+          }
+        } catch (e) {
+          console.warn("RPC get_available_booking_slots notice, delegating to dynamic scheduler:", e.message);
+        }
+      }
+      if (typeof window !== "undefined" && window.AdminData && typeof window.AdminData.getAvailableBookingSlots === "function") {
+        return window.AdminData.getAvailableBookingSlots(date);
+      }
+      // Built-in baseline dynamic scheduler fallback (Mon-Sat 09:00 AM - 08:00 PM, Sunday closed)
+      try {
+        const parts = date.split('-').map(Number);
+        const dayOfWeek = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+        if (dayOfWeek === 0) {
+          return {
+            success: true,
+            date: date,
+            day_available: false,
+            message: "Counselling sessions are unavailable on Sundays. Please select a Monday to Saturday date.",
+            slots: []
+          };
+        }
+        const standardSlots = [
+          "09:00 AM - 09:30 AM", "09:30 AM - 10:00 AM", "10:00 AM - 10:30 AM", "10:30 AM - 11:00 AM",
+          "11:00 AM - 11:30 AM", "11:30 AM - 12:00 PM", "12:00 PM - 12:30 PM", "12:30 PM - 01:00 PM",
+          "02:00 PM - 02:30 PM", "02:30 PM - 03:00 PM", "03:00 PM - 03:30 PM", "03:30 PM - 04:00 PM",
+          "04:00 PM - 04:30 PM", "04:30 PM - 05:00 PM", "05:00 PM - 05:30 PM", "05:30 PM - 06:00 PM",
+          "06:00 PM - 06:30 PM", "06:30 PM - 07:00 PM", "07:00 PM - 07:30 PM", "07:30 PM - 08:00 PM"
+        ];
+        return {
+          success: true,
+          date: date,
+          day_available: true,
+          fully_booked: false,
+          slots: standardSlots
+        };
+      } catch (err) {
+        return { success: false, slots: [], message: "Scheduling system offline" };
+      }
+    },
+
+    // Fetch counsellor availability config & holidays
+    async getCounsellorAvailabilityConfig(counsellorId) {
+      if (!this.isLive()) return { success: false, schedule: [], unavailability: [] };
       const c = this.getClient();
-      const { data, error } = await c.rpc('get_available_booking_slots', { p_date: date });
+      const { data, error } = await c.rpc('get_counsellor_availability_config', { p_counsellor_id: counsellorId });
       if (error) throw error;
+      return data;
+    },
+
+    // Save weekly schedule for counsellor
+    async saveCounsellorAvailability(counsellorId, schedule) {
+      if (!this.isLive()) return { success: false, message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('save_counsellor_availability', {
+        p_counsellor_id: counsellorId,
+        p_schedule: schedule
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    // Manage date-specific unavailabilities and holidays
+    async manageCounsellorUnavailability(action, counsellorId = null, date = null, reason = null, unavailabilityId = null) {
+      if (!this.isLive()) return { success: false, message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('manage_counsellor_unavailability', {
+        p_action: action,
+        p_counsellor_id: counsellorId,
+        p_date: date,
+        p_reason: reason,
+        p_unavailability_id: unavailabilityId
+      });
+      if (error) throw error;
+      return data;
+    },
+    // Fetch communication logs for admin dashboards
+    async getCommunicationLogs(channel = null, status = null, limit = 50, offset = 0) {
+      if (!this.isLive()) return { success: false, data: [] };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('get_dashboard_communication_logs', {
+        p_channel: channel,
+        p_status: status,
+        p_limit: limit,
+        p_offset: offset
+      });
+      if (error) {
+        console.warn('RPC get_dashboard_communication_logs notice:', error.message);
+        return { success: false, data: [] };
+      }
       return data;
     },
 
@@ -463,6 +577,67 @@
       const { data, error } = await c.rpc('get_dashboard_stats');
       if (error) throw error;
       return data;
+    },
+
+    // Get enquiries for current authenticated user's role
+    async getEnquiries(limit = 50, offset = 0) {
+      if (!this.isLive()) return { success: false, data: [], message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('get_dashboard_enquiries', { p_limit: limit, p_offset: offset });
+      if (error) throw error;
+      return data;
+    },
+
+    // Get bookings for current authenticated user's role
+    async getBookings(limit = 50, offset = 0) {
+      if (!this.isLive()) return { success: false, data: [], message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('get_dashboard_bookings', { p_limit: limit, p_offset: offset });
+      if (error) throw error;
+      return data;
+    },
+
+    // Get follow-ups for current authenticated user
+    async getFollowUps() {
+      if (!this.isLive()) return { success: false, data: [], message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('get_dashboard_follow_ups');
+      if (error) throw error;
+      return data;
+    },
+
+    // Get activity log
+    async getActivityLog(limit = 50) {
+      if (!this.isLive()) return { success: false, data: [], message: 'Database offline' };
+      const c = this.getClient();
+      const { data, error } = await c.rpc('get_dashboard_activity_log', { p_limit: limit });
+      if (error) throw error;
+      return data;
+    },
+
+    // Get counsellor list (for assignments)
+    async getCounsellors() {
+      if (!this.isLive()) return [];
+      const c = this.getClient();
+      const { data, error } = await c
+        .from('profiles')
+        .select('id, full_name, email, role, department, specialisation, phone, is_active, daily_capacity')
+        .in('role', ['admission_counsellor', 'academic_counsellor'])
+        .order('full_name');
+      if (error) throw error;
+      return data || [];
+    },
+
+    // Get courses list
+    async getCourses() {
+      if (!this.isLive()) return [];
+      const c = this.getClient();
+      const { data, error } = await c
+        .from('courses')
+        .select('id, name, category, description, examination_list, base_fee, is_active, created_at')
+        .order('name');
+      if (error) throw error;
+      return data || [];
     },
 
     async reassignAdmissionEnquiry(enquiryId, newCounsellorId) {
@@ -485,12 +660,6 @@
       });
       if (error) throw error;
       return data;
-    },
-
-    getWhatsAppShareLink(phone, message) {
-      let clean = String(phone || '').replace(/[^0-9]/g, '');
-      if (clean.length === 10) clean = '91' + clean;
-      return `https://wa.me/${clean}?text=${encodeURIComponent(message || '')}`;
     }
   };
 
